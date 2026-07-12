@@ -25,6 +25,8 @@ const securityHeaders = {
 };
 
 export default defineConfig({
+  // Required by Cloudflare Wrangler Vite project detection / setup.
+  plugins: [],
   server: {
     host: "127.0.0.1",
     port: 5173,

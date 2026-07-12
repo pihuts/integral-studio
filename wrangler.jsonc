@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "integral-studio",
+  "compatibility_date": "2026-07-12",
+  "observability": {
+    "enabled": true
+  },
+  // Static Vite build output — no Worker script required.
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  }
+}
