@@ -58,6 +58,7 @@ const SCENE_ORIGIN = window.location.origin;
 const prefersReducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 const isCoarsePointer = () => window.matchMedia("(pointer: coarse)").matches;
 const isNarrowViewport = () => window.matchMedia("(max-width: 600px)").matches;
+const isCompactViewport = () => window.matchMedia("(max-width: 860px)").matches;
 const scrollBehavior = () => (prefersReducedMotion() ? "auto" : "smooth");
 state.playing = !prefersReducedMotion();
 
@@ -1080,7 +1081,7 @@ function renderPractice(options = {}) {
               </div>
             </div>
           </section>
-          <section class="problem-panel" aria-labelledby="question-title">
+          <section class="problem-panel${state.showSolution ? " solution-open" : ""}" aria-labelledby="question-title">
             <div class="question-top">
               <span class="question-number">${escape(p.title)}</span>
               <span class="question-index">Q${state.questionIndex + 1}</span>
@@ -1143,7 +1144,9 @@ function renderPractice(options = {}) {
     requestAnimationFrame(() => {
       const panel = document.querySelector("#solution-panel");
       if (!panel) return;
-      panel.scrollIntoView({ behavior: motion, block: "start" });
+      // On touch layouts the solution is the next task state; reveal it immediately
+      // so a slow smooth-scroll cannot leave the learner looking at the old answer.
+      panel.scrollIntoView({ behavior: isCompactViewport() ? "auto" : motion, block: "start" });
       panel.focus({ preventScroll: true });
     });
   } else if (options.focusChoice) {
