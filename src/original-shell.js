@@ -1070,33 +1070,62 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
       };
     }
 
+    /** Uniform samples plus exact breakpoints so piecewise tops (L-shapes) get sharp corners. */
+    function sampleAxis(min, max, steps, breakpoints = []) {
+      const values = new Set();
+      for (let i = 0; i <= steps; i += 1) {
+        values.add(min + (max - min) * i / steps);
+      }
+      for (const b of breakpoints) {
+        if (Number.isFinite(b) && b >= min - 1e-9 && b <= max + 1e-9) {
+          values.add(Math.min(max, Math.max(min, b)));
+          // Sample both sides of a jump so the silhouette drops vertically.
+          const eps = Math.max((max - min) * 1e-4, 1e-5);
+          if (b - eps > min) values.add(b - eps);
+          if (b + eps < max) values.add(b + eps);
+        }
+      }
+      return [...values].sort((a, b) => a - b);
+    }
+
+    function piecewiseBreaks(ex) {
+      // Spec may still hold raw curve descriptors on __rawTop when available; also probe cutout.
+      const breaks = [];
+      if (ex.cutout) {
+        if (Number.isFinite(ex.cutout.xMin)) breaks.push(ex.cutout.xMin);
+        if (Number.isFinite(ex.cutout.xMax)) breaks.push(ex.cutout.xMax);
+      }
+      if (Array.isArray(ex.piecewiseBreaks)) breaks.push(...ex.piecewiseBreaks);
+      return breaks;
+    }
+
     function makeRegion(ex) {
       const shape = new THREE.Shape();
       const steps = 72;
       if (ex.orientation === "vertical") {
         const x0 = ex.xMin;
         const x1 = ex.xMax;
-        const start = verticalBounds(ex, x0);
-        shape.moveTo(xToWorld(x0), yToWorld(start.lower));
-        for (let i = 0; i <= steps; i += 1) {
-          const x = x0 + (x1 - x0) * i / steps;
+        const xs = sampleAxis(x0, x1, steps, piecewiseBreaks(ex));
+        const start = verticalBounds(ex, xs[0]);
+        shape.moveTo(xToWorld(xs[0]), yToWorld(start.lower));
+        for (const x of xs) {
           shape.lineTo(xToWorld(x), yToWorld(verticalBounds(ex, x).upper));
         }
-        for (let i = steps; i >= 0; i -= 1) {
-          const x = x0 + (x1 - x0) * i / steps;
+        for (let i = xs.length - 1; i >= 0; i -= 1) {
+          const x = xs[i];
           shape.lineTo(xToWorld(x), yToWorld(verticalBounds(ex, x).lower));
         }
       } else {
         const y0 = ex.yMin;
         const y1 = ex.yMax;
-        const start = horizontalBounds(ex, y0);
-        shape.moveTo(xToWorld(start.left), yToWorld(y0));
-        for (let i = 0; i <= steps; i += 1) {
-          const y = y0 + (y1 - y0) * i / steps;
+        const ys = sampleAxis(y0, y1, steps);
+        const start = horizontalBounds(ex, ys[0]);
+        shape.moveTo(xToWorld(start.left), yToWorld(ys[0]));
+        for (const y of ys) {
           shape.lineTo(xToWorld(horizontalBounds(ex, y).right), yToWorld(y));
         }
-        for (let i = steps; i >= 0; i -= 1) {
-          const y = y0 + (y1 - y0) * i / steps;
+        for (let i = ys.length - 1; i >= 0; i -= 1) {
+          const y = ys[i];
           shape.lineTo(xToWorld(horizontalBounds(ex, y).left), yToWorld(y));
         }
       }
@@ -1294,37 +1323,121 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
       return makeTube("y", value, thickness, inner, outer, angle, material, thickness, axisX);
     }
 
-    function makePoint(x, y, color = 0x7b2d26) {
+    function makePoint(x, y, color = null, radius = 0.026) {
+      const useShared = color == null || color === 0x7b2d26;
       const mesh = new THREE.Mesh(
-        new THREE.SphereGeometry(0.026, 16, 12),
-        materials.point
+        new THREE.SphereGeometry(radius, 16, 12),
+        useShared
+          ? materials.point
+          : new THREE.MeshStandardMaterial({
+              color,
+              roughness: 0.45,
+              metalness: 0.05,
+              transparent: true,
+              opacity: 0.95
+            })
       );
       mesh.position.set(xToWorld(x), yToWorld(y), 0.04);
+      mesh.userData.isPoint = true;
       return mesh;
+    }
+
+    /** Outline of a removed rectangular piece (composite L-shapes, etc.). */
+    function makeCutoutGhost(cutout) {
+      if (!cutout) return null;
+      const x0 = Number(cutout.xMin);
+      const x1 = Number(cutout.xMax);
+      const y0 = Number(cutout.yMin);
+      const y1 = Number(cutout.yMax);
+      if (![x0, x1, y0, y1].every(Number.isFinite)) return null;
+      const group = new THREE.Group();
+      group.name = "cutoutGhost";
+      group.userData.isCutoutGhost = true;
+      const z = 0.028;
+      // This overlay fades independently. A private material prevents the
+      // fade from mutating the shared red curve/axis material.
+      const outlineMaterial = new THREE.LineBasicMaterial({
+        color: 0xa23b3b,
+        transparent: true,
+        opacity: 0.9,
+      });
+      const corners = [
+        [x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]
+      ].map(([x, y]) => new THREE.Vector3(xToWorld(x), yToWorld(y), z));
+      group.add(makeLine(corners, outlineMaterial));
+      // Light fill so the "missing" corner is obvious against the L-region.
+      const shape = new THREE.Shape();
+      shape.moveTo(xToWorld(x0), yToWorld(y0));
+      shape.lineTo(xToWorld(x1), yToWorld(y0));
+      shape.lineTo(xToWorld(x1), yToWorld(y1));
+      shape.lineTo(xToWorld(x0), yToWorld(y1));
+      shape.closePath();
+      const fillMat = new THREE.MeshBasicMaterial({
+        color: 0xa23b3b,
+        transparent: true,
+        opacity: 0.14,
+        side: THREE.DoubleSide,
+        depthWrite: false
+      });
+      const fill = new THREE.Mesh(new THREE.ShapeGeometry(shape), fillMat);
+      fill.position.z = 0.01;
+      group.add(fill);
+      return group;
+    }
+
+    /** Secondary markers for composite parts (keep / remove centers). */
+    function makePartMarkers(parts) {
+      if (!Array.isArray(parts) || !parts.length) return null;
+      const group = new THREE.Group();
+      group.name = "partMarkers";
+      for (const part of parts) {
+        if (!Number.isFinite(part?.x) || !Number.isFinite(part?.y)) continue;
+        const remove = part.role === "remove";
+        const color = remove ? 0xa23b3b : 0x3f8a5f;
+        const pt = makePoint(part.x, part.y, color, remove ? 0.018 : 0.02);
+        pt.userData.partRole = part.role || "keep";
+        group.add(pt);
+      }
+      return group;
+    }
+
+    function isAreaStripMethod(method) {
+      return method === "area" || method === "centroid" || method === "inertia";
     }
 
     function makeArcApproximation(ex, count, reveal) {
       const group = new THREE.Group();
       const shown = Math.max(1, Math.floor(count * reveal));
-      const dx = (ex.xMax - ex.xMin) / count;
+      const horizontal = ex.orientation === "horizontal";
+      const step = (horizontal ? ex.yMax - ex.yMin : ex.xMax - ex.xMin) / count;
+      const pointAt = value => horizontal
+        ? [ex.right(value), value]
+        : [value, ex.top(value)];
       for (let i = 0; i <= shown; i += 1) {
-        const x = ex.xMin + dx * i;
-        group.add(makePoint(x, ex.top(x)));
+        const value = (horizontal ? ex.yMin : ex.xMin) + step * i;
+        const [px, py] = pointAt(value);
+        group.add(makePoint(px, py));
       }
       for (let i = 0; i < shown; i += 1) {
-        const x0 = ex.xMin + dx * i;
-        const x1 = x0 + dx;
-        const y0 = ex.top(x0);
-        const y1 = ex.top(x1);
+        const v0 = (horizontal ? ex.yMin : ex.xMin) + step * i;
+        const v1 = v0 + step;
+        const [x0, y0] = pointAt(v0);
+        const [x1, y1] = pointAt(v1);
         group.add(makeLine([
           new THREE.Vector3(xToWorld(x0), yToWorld(y0), 0.06),
           new THREE.Vector3(xToWorld(x1), yToWorld(y1), 0.06),
         ], materials.lineAmber));
-        group.add(makeLine([
-          new THREE.Vector3(xToWorld(x0), yToWorld(y0), 0.045),
-          new THREE.Vector3(xToWorld(x1), yToWorld(y0), 0.045),
-          new THREE.Vector3(xToWorld(x1), yToWorld(y1), 0.045),
-        ], materials.lineGreen));
+        group.add(makeLine(horizontal
+          ? [
+              new THREE.Vector3(xToWorld(x0), yToWorld(y0), 0.045),
+              new THREE.Vector3(xToWorld(x0), yToWorld(y1), 0.045),
+              new THREE.Vector3(xToWorld(x1), yToWorld(y1), 0.045),
+            ]
+          : [
+              new THREE.Vector3(xToWorld(x0), yToWorld(y0), 0.045),
+              new THREE.Vector3(xToWorld(x1), yToWorld(y0), 0.045),
+              new THREE.Vector3(xToWorld(x1), yToWorld(y1), 0.045),
+            ], materials.lineGreen));
       }
       return group;
     }
@@ -1459,7 +1572,13 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
     }
 
     function bowlRadius(y) {
-      return Math.sqrt(Math.max(0, 9 - (y - 3) * (y - 3)));
+      const radius = Number(activeExample?.bowlRadius) || 3;
+      const centerY = Number(activeExample?.bowlCenterY) || radius;
+      return Math.sqrt(Math.max(0, radius * radius - (y - centerY) * (y - centerY)));
+    }
+
+    function bowlSpoutHeight() {
+      return Number(activeExample?.spoutHeight) || 8;
     }
 
     function makeWaterDisk(y, thickness, material = materials.water) {
@@ -1474,8 +1593,10 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
     function makeBowlModel() {
       const group = new THREE.Group();
       const rings = 18;
+      const centerY = Number(activeExample?.bowlCenterY) || 3;
+      const spoutHeight = bowlSpoutHeight();
       for (let i = 0; i <= rings; i += 1) {
-        const y = 3 * i / rings;
+        const y = centerY * i / rings;
         const radius = bowlRadius(y);
         group.add(makeLine(
           Array.from({ length: 73 }, (_, j) => {
@@ -1487,19 +1608,20 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
       }
       group.add(makeLine([
         new THREE.Vector3(0, yToWorld(0), 0),
-        new THREE.Vector3(0, yToWorld(8), 0),
+        new THREE.Vector3(0, yToWorld(spoutHeight), 0),
       ], materials.lineRed));
       return group;
     }
 
     function makePumpSample(y, progress) {
       const group = new THREE.Group();
-      const liftY = y + (8 - y) * progress;
+      const spoutHeight = bowlSpoutHeight();
+      const liftY = y + (spoutHeight - y) * progress;
       const disk = makeWaterDisk(liftY, 0.09, materials.waterHighlight);
       group.add(disk);
       group.add(makeLine([
         new THREE.Vector3(xToWorld(bowlRadius(y) + 0.2), yToWorld(y), 0),
-        new THREE.Vector3(xToWorld(bowlRadius(y) + 0.2), yToWorld(8), 0),
+        new THREE.Vector3(xToWorld(bowlRadius(y) + 0.2), yToWorld(spoutHeight), 0),
       ], materials.lineAmber));
       return group;
     }
@@ -1970,10 +2092,8 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
       measureLabel.textContent = activeExample.measureLabel;
       const isShell = activeExample.method.startsWith("shell");
       const isCrossSection = activeExample.method.startsWith("cross-");
-      const isAreaLike =
-        activeExample.method === "area" ||
-        activeExample.method === "inertia" ||
-        activeExample.method === "centroid";
+      const isAreaLike = isAreaStripMethod(activeExample.method);
+      const hasCutout = Boolean(activeExample.cutout);
       const piece = isShell
         ? "shell"
         : activeExample.method.startsWith("disk")
@@ -1997,27 +2117,36 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
       if (isAreaLike) {
         stepRegionText.textContent =
           activeExample.method === "centroid"
-            ? "Sketch the lamina (planar region) whose center of mass we seek."
+            ? (hasCutout
+              ? "Sketch the composite lamina — full shape minus the removed corner (hatched)."
+              : "Sketch the lamina (planar region) whose center of mass we seek.")
             : activeExample.method === "inertia"
               ? "Sketch the region and the axis for the second moment."
               : "Sketch the integrand y = f(x) over the interval of integration.";
-        stepSliceText.textContent = `Choose a thin ${sliceDirection} strip of height f(x) and width dx.`;
+        stepSliceText.textContent =
+          activeExample.method === "centroid" && hasCutout
+            ? `Choose a thin ${sliceDirection} strip; height follows the L-profile (shorter under the cutout).`
+            : `Choose a thin ${sliceDirection} strip of height f(x) and width dx.`;
         stepRotateText.textContent =
           activeExample.method === "centroid"
-            ? "Form the moment contribution of one strip (mass × lever arm)."
+            ? (hasCutout
+              ? "Each strip contributes area × lever arm; composite parts use keep-minus-remove moments."
+              : "Form the moment contribution of one strip (mass × lever arm).")
             : activeExample.method === "inertia"
               ? "Form the second-moment contribution of one strip."
               : "Form one strip area: height × width = f(x) dx.";
         stepStackText.textContent =
           activeExample.method === "centroid"
-            ? "Sum strip moments and divide by total area to locate the centroid."
+            ? (hasCutout
+              ? "Combine part moments, divide by net area — the balance point appears."
+              : "Sum strip moments and divide by total area to locate the centroid.")
             : activeExample.method === "inertia"
               ? "Add strip contributions to accumulate the second moment."
               : "Add many thin strips to accumulate the definite integral (signed area).";
         legendSlice.textContent = `${sliceDirection[0].toUpperCase()}${sliceDirection.slice(1)} strip`;
         legendSolid.textContent =
           activeExample.method === "centroid"
-            ? "Accumulated region for balance"
+            ? (hasCutout ? "L-region + balance point" : "Accumulated region for balance")
             : activeExample.method === "inertia"
               ? "Accumulated second-moment strips"
               : "Accumulated area strips";
@@ -2059,7 +2188,24 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
         }
         regionGroup.add(makeCurve(activeExample));
         regionGroup.add(makeAxes(activeExample));
-        if (activeExample.marker) regionGroup.add(makePoint(activeExample.marker.x, activeExample.marker.y, 0xbc9a62));
+        if (activeExample.cutout) {
+          const ghost = makeCutoutGhost(activeExample.cutout);
+          if (ghost) regionGroup.add(ghost);
+        }
+        if (activeExample.parts) {
+          const partGroup = makePartMarkers(activeExample.parts);
+          if (partGroup) {
+            partGroup.userData.isPartMarkers = true;
+            regionGroup.add(partGroup);
+          }
+        }
+        if (activeExample.marker) {
+          const centroidPt = makePoint(activeExample.marker.x, activeExample.marker.y, 0xbc9a62, 0.034);
+          centroidPt.userData.isCentroidMarker = true;
+          centroidPt.scale.setScalar(0.15);
+          centroidPt.visible = false;
+          regionGroup.add(centroidPt);
+        }
       }
       clearGroup(sliceGroup);
       clearGroup(shellGroup);
@@ -2113,7 +2259,7 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
       for (let i = 0; i < shown; i += 1) {
         const value = min + shellWidth * (i + 0.5);
         let piece;
-        if (ex.method === "area") {
+        if (isAreaStripMethod(ex.method)) {
           piece = makeSlice(ex, value, shellWidth * 0.86, materials.completed);
         } else if (ex.method.startsWith("cross-")) {
           piece = makeCrossSection(ex, value, shellWidth * 0.86, materials.completed, 1);
@@ -2248,8 +2394,18 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
             shellGroup.add(makeCircumferenceRingY(ex, sampleValue, materials.lineAmber));
           } else if (ex.method.startsWith("cross-")) {
             shellGroup.add(makeCrossSection(ex, sampleValue, sampleWidth * 0.82, materials.shell, rotatePhase));
-          } else if (ex.method === "area") {
+          } else if (isAreaStripMethod(ex.method)) {
             shellGroup.add(makeSlice(ex, sampleValue, sampleWidth * 0.82, materials.shell));
+            // Centroid moment phase: draw lever arm from strip center to the y-axis (x=0).
+            if (ex.method === "centroid" && ex.orientation === "vertical") {
+              const vb = verticalBounds(ex, sampleValue);
+              const midY = (vb.lower + vb.upper) / 2;
+              shellGroup.add(makeLine([
+                new THREE.Vector3(xToWorld(0), yToWorld(midY), 0.05),
+                new THREE.Vector3(xToWorld(sampleValue), yToWorld(midY), 0.05)
+              ], materials.lineAmber));
+              shellGroup.add(makePoint(sampleValue, midY, 0xbc9a62, 0.016));
+            }
           } else {
             const piece = ex.method.startsWith("shell")
               ? makeShell(ex, sampleValue, shellAngle, materials.shell, sampleWidth * 0.82)
@@ -2274,6 +2430,54 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
       const regionMesh = regionGroup.children.find(child => child.material === materials.region);
       if (regionMesh?.material) {
         regionMesh.material.opacity = progress > 0.74 ? 0.2 : 0.55;
+      }
+
+      // Composite cutout: bright at region stage, fade as strips accumulate.
+      const cutoutGhost = regionGroup.children.find(child => child.name === "cutoutGhost");
+      if (cutoutGhost) {
+        const ghostOpacity = progress < 0.28
+          ? 1
+          : progress < 0.72
+            ? 1 - (progress - 0.28) / 0.44 * 0.55
+            : 0.35;
+        cutoutGhost.traverse(child => {
+          if (child.material && "opacity" in child.material) {
+            // outline lines stay more visible than fill
+            const isFill = child.isMesh && child.geometry?.type === "ShapeGeometry";
+            child.material.transparent = true;
+            child.material.opacity = isFill
+              ? 0.14 * ghostOpacity
+              : Math.min(1, 0.55 + 0.45 * ghostOpacity);
+          }
+        });
+        cutoutGhost.visible = progress < 0.92;
+      }
+
+      // Part markers (A1 keep / A2 remove): show early, fade once balance appears.
+      const partMarkers = regionGroup.children.find(child => child.userData?.isPartMarkers);
+      if (partMarkers) {
+        const showParts = progress < 0.78;
+        partMarkers.visible = showParts;
+        const s = progress < 0.2 ? 0.4 + progress * 3 : 1;
+        partMarkers.scale.setScalar(Math.min(1, s));
+      }
+
+      // Centroid marker: grow in during the balance/stack phase.
+      const centroidMarker = regionGroup.children.find(child => child.userData?.isCentroidMarker);
+      if (centroidMarker) {
+        if (ex.method === "centroid" || ex.marker) {
+          const reveal = Math.min(1, Math.max(0, (progress - 0.72) / 0.22));
+          centroidMarker.visible = reveal > 0.02;
+          const pulse = 1 + 0.08 * Math.sin(performance.now() * 0.006);
+          centroidMarker.scale.setScalar((0.2 + 0.8 * reveal) * pulse);
+          if (centroidMarker.material && "opacity" in centroidMarker.material) {
+            centroidMarker.material.transparent = true;
+            centroidMarker.material.opacity = 0.35 + 0.65 * reveal;
+          }
+        } else {
+          centroidMarker.visible = true;
+          centroidMarker.scale.setScalar(1);
+        }
       }
 
       if (progress < 0.24) setActiveStep("region");
@@ -2518,6 +2722,7 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
     window.addEventListener("message", event => {
       // Only accept control messages from same-origin parents (CEE 103 shell).
       if (event.origin !== window.location.origin) return;
+      if (window.parent !== window && event.source !== window.parent) return;
       const data = event.data;
       if (!data || data.type !== "integral-studio") return;
       switch (data.action) {

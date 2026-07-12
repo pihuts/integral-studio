@@ -1,4 +1,5 @@
 :root {
+  color-scheme: light;
   --ink: #1e1a16;
   --muted: #6b6158;
   --line: #d7ccbb;
@@ -282,6 +283,16 @@ button:not(:disabled), select, input { cursor: pointer; }
   width: 100%;
   max-width: 360px;
   margin-top: 8px;
+}
+
+.load-error {
+  max-width: 40ch;
+  margin: 10px 0 0;
+  color: var(--red);
+  font-family: var(--font-ui);
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.45;
 }
 
 .landing-references {
@@ -602,6 +613,11 @@ a.question-source:hover {
   touch-action: none;
 }
 
+.legacy-animation:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
 .legacy-animation:active {
   cursor: grabbing;
 }
@@ -791,8 +807,9 @@ a.question-source:hover {
 }
 .choice-math .katex { font-size: 1.3em; }
 .choice-long .choice-math {
-  overflow-x: visible;
-  white-space: normal;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  white-space: nowrap;
 }
 .choice-long .choice-math .katex {
   font-size: 1.05em;
@@ -1424,7 +1441,7 @@ a.question-source:hover {
 
   .workspace {
     /* Extra bottom room for fixed problem navigator */
-    padding: 10px 10px calc(7.5rem + env(safe-area-inset-bottom, 0px));
+    padding: 10px 10px calc(11rem + env(safe-area-inset-bottom, 0px));
   }
 
   .problem-panel {
@@ -1551,8 +1568,8 @@ a.question-source:hover {
   }
 
   .problem-pill {
-    width: 36px;
-    height: 36px;
+    width: 44px;
+    height: 44px;
     font-size: 0.75rem;
   }
 
@@ -1738,7 +1755,7 @@ a.question-source:hover {
   }
 
   .step-item {
-    min-height: 40px;
+    min-height: 44px;
     padding: 6px 12px;
     font-size: 0.75rem;
   }
@@ -1749,8 +1766,8 @@ a.question-source:hover {
   }
 
   .problem-pill {
-    width: 40px;
-    height: 40px;
+    width: 44px;
+    height: 44px;
   }
 
   .problem-nav-step,

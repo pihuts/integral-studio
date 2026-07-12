@@ -493,6 +493,27 @@ export const VISUAL_BY_SOURCE = {
     top: { t: "lin", a: -1, b: 15 },
     formula: ["A=25\\pi", "D(y)=15-y", "dW=25\\pi\\rho g(15-y)\\,dy"]
   },
+  "OpenStax Vol. 1 §6.5 / Briggs application concept 17, item 17": {
+    title: "Pumping from a bowl",
+    subtitle: "Hemispherical bowl r = 2 m - pump full water to the rim.",
+    orientation: "horizontal",
+    method: "pump-bowl",
+    axisLabel: "vertical lift",
+    yMin: 0,
+    yMax: 2,
+    bowlRadius: 2,
+    bowlCenterY: 2,
+    spoutHeight: 2,
+    left: { t: "circle-half-y", R: 2, cy: 2, s: -1 },
+    right: { t: "circle-half-y", R: 2, cy: 2, s: 1 },
+    formula: [
+      "r(y)=\\sqrt{4-(y-2)^2}",
+      "dW=9800\\pi(4-(y-2)^2)(2-y)\\,dy",
+      "W=\\int_0^2 \\rho g A(y) D(y)\\,dy"
+    ],
+    sampleLabel: "water height y",
+    measureLabel: "lift distance"
+  },
   "Briggs Ch. 6 Review Ex. 4": {
     title: "Displacement",
     subtitle: "Velocity v(t) = 20 cos(πt) — signed area gives displacement.",
@@ -833,14 +854,31 @@ export const VISUAL_BY_KEY = {
 function inferVisualSpec(problem) {
   const params = problem.visualParams;
   if (!params) return null;
+  // Prefer topic-specific strip methods so the visualizer uses the right narration
+  // (Region → Strip → Moment → Balance) even when an older bank stored method: "area".
+  let method = params.method || problem.visual || "area";
+  if (problem.visual === "centroid" && (method === "area" || !params.method)) {
+    method = "centroid";
+  }
+  if (problem.visual === "inertia" && (method === "area" || !params.method)) {
+    method = "inertia";
+  }
+  const sampleDefault =
+    method === "centroid" || method === "inertia" || method === "area"
+      ? "sample x"
+      : params.sampleLabel;
+  const measureDefault =
+    method === "centroid" || method === "inertia" || method === "area"
+      ? "strip height"
+      : params.measureLabel;
   return {
     title: problem.title || "Problem",
     subtitle: problem.insight || "",
     orientation: params.orientation || "vertical",
-    method: params.method || problem.visual || "area",
+    method,
     formula: params.formula || [],
-    sampleLabel: params.sampleLabel,
-    measureLabel: params.measureLabel,
+    sampleLabel: params.sampleLabel || sampleDefault,
+    measureLabel: params.measureLabel || measureDefault,
     axisLabel: params.axisLabel,
     axisX: params.axisX,
     axisY: params.axisY,
@@ -853,6 +891,8 @@ function inferVisualSpec(problem) {
     left: params.left,
     right: params.right,
     marker: params.marker,
+    cutout: params.cutout,
+    parts: params.parts,
     alternateSpec: params.alternateSpec
   };
 }

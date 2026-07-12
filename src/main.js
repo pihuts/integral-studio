@@ -1,9 +1,23 @@
-import "katex/dist/katex.min.css";
-import katex from "katex";
 import "./style.css";
-import { getBriggsProblem, briggsProblemCount, QUESTIONS_PER_TOPIC } from "./briggsProblems.js";
+import { getBriggsProblem, briggsProblemCount, loadBriggsBank, QUESTIONS_PER_TOPIC } from "./briggsProblems.js";
 import { buildLegacySpec, resolveVisualSpec, problemHasDualMethod } from "./visualSpecs.js";
 import { REFERENCES, openStaxWebUrl, sourceLink } from "./references.js";
+
+let katex;
+let practiceDependenciesPromise;
+
+function loadPracticeDependencies() {
+  if (!practiceDependenciesPromise) {
+    practiceDependenciesPromise = Promise.all([
+      loadBriggsBank(),
+      import("katex").then(module => {
+        katex = module.default;
+      }),
+      import("katex/dist/katex.min.css")
+    ]);
+  }
+  return practiceDependenciesPromise;
+}
 
 const TOPICS = {
   fundamentals: { label: "Fundamentals", icon: "∫", description: "Antiderivatives" },
@@ -36,7 +50,9 @@ const state = {
   animationStep: "region",
   animationStepText: "Sketch the bounded region.",
   vizLoading: true,
-  vizError: null
+  vizError: null,
+  practiceLoading: false,
+  practiceError: null
 };
 
 const SCENE_ORIGIN = window.location.origin;
@@ -122,20 +138,20 @@ function animationStepsFor(problem) {
       { id: "stack", label: "Surface" }
     ];
   }
+  if (method === "centroid" || problem?.visual === "centroid") {
+    return [
+      { id: "region", label: "Region" },
+      { id: "slice", label: "Strip" },
+      { id: "rotate", label: "Moment" },
+      { id: "stack", label: "Balance" }
+    ];
+  }
   if (method === "area" || method === "inertia" || problem?.visual === "area" || problem?.visual === "inertia") {
     return [
       { id: "region", label: "Region" },
       { id: "slice", label: "Strip" },
       { id: "rotate", label: "dA" },
       { id: "stack", label: "Sum" }
-    ];
-  }
-  if (method === "centroid" || problem?.visual === "centroid") {
-    return [
-      { id: "region", label: "Region" },
-      { id: "slice", label: "Slice" },
-      { id: "rotate", label: "Moment" },
-      { id: "stack", label: "Balance" }
     ];
   }
   return [
@@ -212,7 +228,7 @@ function renderProblemNavigator() {
         <p class="problem-nav-position" aria-live="polite"><span class="problem-nav-current">${current + 1}</span><span class="problem-nav-total">/${QUESTIONS_PER_TOPIC}</span></p>
         <button type="button" class="secondary problem-nav-step" data-question-nav="next" ${current === QUESTIONS_PER_TOPIC - 1 ? "disabled" : ""} aria-label="Next question">→</button>
       </div>
-      <div class="problem-pills" role="list" aria-label="Questions ${bandStart + 1} to ${bandEnd}">${pills}</div>
+      <div class="problem-pills" role="group" aria-label="Questions ${bandStart + 1} to ${bandEnd}">${pills}</div>
     </nav>`;
 }
 
@@ -772,17 +788,31 @@ function goToQuestion(index) {
   state.questionIndex = Math.max(0, Math.min(QUESTIONS_PER_TOPIC - 1, index));
   state.problem = currentProblem();
   restoreQuestionState(state.problem);
-  render();
+  render({ focusChoice: state.problem.choices?.[0]?.id });
 }
 
-function startPractice() {
+async function startPractice() {
+  state.practiceLoading = true;
+  state.practiceError = null;
+  renderLanding();
+  try {
+    await loadPracticeDependencies();
+  } catch {
+    // Allow a later click to retry transient KaTeX/CSS loading failures.
+    practiceDependenciesPromise = null;
+    state.practiceLoading = false;
+    state.practiceError = "Practice could not load. Check your connection and try again.";
+    renderLanding();
+    return;
+  }
+  state.practiceLoading = false;
   state.screen = "practice";
   state.questionIndex = 0;
   state.problemCache = {};
   state.problem = currentProblem();
   Object.assign(state, { selected: null, checked: false, showSolution: false });
   saveProgress();
-  render();
+  render({ focusChoice: state.problem.choices?.[0]?.id });
 }
 
 function goLanding() {
@@ -976,9 +1006,9 @@ function renderLanding() {
         <h1 class="landing-title">Practice integrals</h1>
         <section class="landing-section" aria-labelledby="topic-heading">
           <h2 id="topic-heading" class="landing-label">Topic</h2>
-          <div class="topic-grid" role="listbox" aria-labelledby="topic-heading">
+          <div class="topic-grid" role="radiogroup" aria-labelledby="topic-heading">
             ${Object.entries(TOPICS).map(([id, item]) => `
-              <button type="button" class="topic-card ${state.topic === id ? "selected" : ""}" role="option" aria-selected="${state.topic === id}" data-topic="${id}">
+              <button type="button" class="topic-card ${state.topic === id ? "selected" : ""}" role="radio" aria-checked="${state.topic === id}" tabindex="${state.topic === id ? "0" : "-1"}" data-topic="${id}">
                 <span class="topic-card-icon" aria-hidden="true">${item.icon}</span>
                 <span class="topic-card-label">${item.label}</span>
                 <span class="topic-card-desc">${escape(item.description)}</span>
@@ -986,7 +1016,8 @@ function renderLanding() {
             `).join("")}
           </div>
         </section>
-        <button type="button" id="start-practice" class="primary landing-start">Start practice</button>
+        <button type="button" id="start-practice" class="primary landing-start" ${state.practiceLoading ? "disabled" : ""} aria-busy="${state.practiceLoading}">${state.practiceLoading ? "Loading practice..." : "Start practice"}</button>
+        ${state.practiceError ? `<p class="load-error" role="alert">${escape(state.practiceError)}</p>` : ""}
         <section class="landing-section landing-references" aria-labelledby="refs-heading">
           <h2 id="refs-heading" class="landing-label">References</h2>
           <div class="reference-grid">
@@ -996,10 +1027,22 @@ function renderLanding() {
       </main>
     </div>`;
 
-  document.querySelectorAll("[data-topic]").forEach(btn => {
+  const topicButtons = [...document.querySelectorAll("[data-topic]")];
+  const selectTopic = (id, focus = false) => {
+    state.topic = id;
+    renderLanding();
+    if (focus) requestAnimationFrame(() => document.querySelector(`[data-topic="${id}"]`)?.focus());
+  };
+  topicButtons.forEach((btn, index) => {
     btn.addEventListener("click", () => {
-      state.topic = btn.dataset.topic;
-      renderLanding();
+      selectTopic(btn.dataset.topic, true);
+    });
+    btn.addEventListener("keydown", event => {
+      if (!["ArrowDown", "ArrowRight", "ArrowUp", "ArrowLeft"].includes(event.key)) return;
+      event.preventDefault();
+      const direction = event.key === "ArrowDown" || event.key === "ArrowRight" ? 1 : -1;
+      const next = topicButtons[(index + direction + topicButtons.length) % topicButtons.length];
+      selectTopic(next.dataset.topic, true);
     });
   });
   document.querySelector("#start-practice")?.addEventListener("click", startPractice);
@@ -1036,7 +1079,7 @@ function renderPractice(options = {}) {
               <p id="step-detail" class="step-detail" aria-live="polite">${escape(state.animationStepText)}</p>
             </div>
             <div id="three-host" class="viz-host${state.vizLoading ? " is-loading" : ""}${state.vizError ? " has-error" : ""}" role="region" aria-label="Concept visualization" aria-busy="${state.vizLoading}" aria-describedby="camera-hint">
-              <div class="viz-loading" id="viz-loading" aria-hidden="${state.vizLoading && !state.vizError ? "false" : "true"}">
+              <div class="viz-loading" id="viz-loading" role="status" aria-live="polite" aria-hidden="${state.vizLoading && !state.vizError ? "false" : "true"}">
                 <span class="viz-loading-bar" aria-hidden="true"></span>
                 <span class="viz-loading-text">Loading visualization…</span>
               </div>
@@ -1099,6 +1142,7 @@ function renderPractice(options = {}) {
                   role="radio"
                   aria-label="${escape(choiceAriaLabel(option, index, p))}"
                   aria-checked="${state.selected === option.id}"
+                  tabindex="${state.selected === option.id || (!state.selected && index === 0) ? "0" : "-1"}"
                   ${state.checked ? "disabled" : ""}>
                   <span class="choice-letter" aria-hidden="true">${"ABCD"[index]}</span>
                   <span class="choice-math">${tex(option.latex)}</span>
@@ -1399,6 +1443,8 @@ function mountScene(problem) {
     loader = document.createElement("div");
     loader.id = "viz-loading";
     loader.className = "viz-loading";
+    loader.setAttribute("role", "status");
+    loader.setAttribute("aria-live", "polite");
     loader.innerHTML = '<span class="viz-loading-bar" aria-hidden="true"></span><span class="viz-loading-text">Loading visualization…</span>';
     host.prepend(loader);
   }
@@ -1445,9 +1491,14 @@ function mountScene(problem) {
   const loadTimer = window.setTimeout(() => {
     if (state.vizLoading) {
       loadTimedOut = true;
-      showVizError("Visualization took too long to load. Check your connection and try again.");
+      failScene("Visualization took too long to load. Check your connection and try again.");
     }
   }, 8000);
+
+  const failScene = message => {
+    sceneController?.dispose();
+    showVizError(message);
+  };
 
   const markReady = () => {
     if (loadTimedOut && state.vizError) return;
@@ -1463,11 +1514,12 @@ function mountScene(problem) {
   frame.addEventListener("load", onLoad);
   frame.addEventListener("error", () => {
     window.clearTimeout(loadTimer);
-    showVizError("Couldn't load the visualization. Try again.");
+    failScene("Couldn't load the visualization. Try again.");
   });
 
   const onMessage = event => {
     if (event.origin !== SCENE_ORIGIN) return;
+    if (event.source !== frame.contentWindow) return;
     const data = event.data;
     if (!data || data.type !== "integral-studio") return;
     if (data.action === "ready" || data.action === "progress" || data.action === "step") {
@@ -1478,11 +1530,14 @@ function mountScene(problem) {
       const message = typeof data.message === "string" && data.message.trim()
         ? data.message.trim().slice(0, 240)
         : "Couldn't render the visualization.";
-      showVizError(message);
+      failScene(message);
       return;
     }
     if (data.action === "progress") {
-      const nextProgress = Number(data.progress) || 0;
+      const rawProgress = Number(data.progress);
+      const nextProgress = Number.isFinite(rawProgress)
+        ? Math.min(1, Math.max(0, rawProgress))
+        : 0;
       const nextPlaying = prefersReducedMotion() ? false : Boolean(data.playing);
       const progressInput = document.querySelector("#playback-progress");
       const progressOut = document.querySelector("#progress-out");
@@ -1512,6 +1567,7 @@ function mountScene(problem) {
       window.removeEventListener("message", onMessage);
       frame.removeEventListener("load", onLoad);
       frame.remove();
+      sceneController = null;
     },
     reset: () => postToScene({ action: "resetView" }),
     post: postToScene

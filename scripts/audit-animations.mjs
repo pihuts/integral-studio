@@ -5,7 +5,10 @@
 
 import { getBriggsProblem, briggsProblemCount } from "../src/briggsProblems.js";
 import { VISUAL_BY_SOURCE, VISUAL_BY_KEY } from "../src/briggsVisualSpecs.js";
-import { buildExampleFromSpec, compileCurve } from "../src/visualSpecs.js";
+import { buildExampleFromSpec, compileCurve, SUPPORTED_CURVE_TYPES, SUPPORTED_RENDER_METHODS } from "../src/visualSpecs.js";
+import { loadBriggsBank } from "../src/briggsProblems.js";
+
+await loadBriggsBank();
 
 const TOPICS = [
   "fundamentals",
@@ -19,40 +22,7 @@ const TOPICS = [
 ];
 const DIFFICULTIES = ["easy", "medium", "hard"];
 
-const KNOWN_CURVE_TYPES = new Set([
-  "c",
-  "lin",
-  "pow",
-  "pow-shift",
-  "sqrt",
-  "poly",
-  "piecewise",
-  "exp",
-  "quad",
-  "sin",
-  "cos",
-  "cos2",
-  "sqrt-shift",
-  "sub-u-power",
-  "inv-sqrt-minus-recip",
-  "sec2",
-  "sec-tan",
-  "lin-cos",
-  "trig-combo",
-  "exp-plus-recip",
-  "pow-sqrt",
-  "log",
-  "recip",
-  "recip-quad",
-  "inv-sqrt-unit",
-  "neg-log",
-  "sqrt-inv",
-  "sqrt-inv-cap",
-  "inv-quad-hi",
-  "inv-quad-lo",
-  "circle-half-y",
-  "circle-upper"
-]);
+const KNOWN_CURVE_TYPES = new Set(SUPPORTED_CURVE_TYPES);
 
 const METHOD_ORIENTATION = {
   "shell-x": "horizontal",
@@ -63,8 +33,10 @@ const METHOD_ORIENTATION = {
   "washer-x": "vertical",
   "surface-x": "vertical",
   "surface-y": "either",
-  area: "vertical",
-  arc: "vertical",
+  area: "either",
+  centroid: "either",
+  inertia: "either",
+  arc: "either",
   "pump-bowl": "horizontal",
   "pool-fill": "vertical",
   "goat-barn": "geometry",
@@ -73,17 +45,7 @@ const METHOD_ORIENTATION = {
 };
 
 /** Methods original-shell.js handles with dedicated render paths. */
-const EXPLICIT_RENDER_METHODS = new Set([
-  "area",
-  "arc",
-  "surface-x",
-  "surface-y",
-  "pump-bowl",
-  "pool-fill",
-  "goat-barn",
-  "cross-square",
-  "cross-semicircle"
-]);
+const EXPLICIT_RENDER_METHODS = new Set(SUPPORTED_RENDER_METHODS);
 
 function isShellMethod(method) {
   return typeof method === "string" && method.startsWith("shell");
@@ -96,17 +58,19 @@ function isWasherDiskMethod(method) {
 function resolveOrientation(method, specOrientation) {
   if (method === "shell-x" || method === "disk-y" || method === "washer-y") return "horizontal";
   if (method === "surface-y" && specOrientation === "horizontal") return "horizontal";
+  if (method === "arc") return specOrientation === "horizontal" ? "horizontal" : "vertical";
   if (
     method === "shell-y" ||
     method === "disk-x" ||
     method === "washer-x" ||
     method === "surface-x" ||
-    method === "area" ||
-    method === "arc" ||
     method === "cross-square" ||
     method === "cross-semicircle"
   ) {
     return "vertical";
+  }
+  if (["area", "centroid", "inertia"].includes(method)) {
+    return specOrientation === "horizontal" ? "horizontal" : "vertical";
   }
   return specOrientation === "horizontal" ? "horizontal" : "vertical";
 }

@@ -3,6 +3,21 @@
  * Each curve is { t: type, ...params } and compiled to a function at runtime.
  */
 
+export const SUPPORTED_CURVE_TYPES = Object.freeze([
+  "c", "lin", "pow", "pow-shift", "sqrt", "poly", "rat", "samples", "piecewise",
+  "exp", "quad", "sin", "cos", "cosh", "sinh", "cos2", "sqrt-shift", "sub-u-power",
+  "inv-sqrt-minus-recip", "sec2", "csc2", "sec-tan", "lin-cos", "lin-sin", "trig-combo",
+  "exp-plus-recip", "exp-lin-recip", "sub-u-gen", "sub-u-linear", "pow-sqrt", "log", "recip",
+  "recip-quad", "inv-sqrt-unit", "inv-sqrt", "neg-log", "sqrt-inv", "sqrt-inv-cap",
+  "inv-quad-hi", "inv-quad-lo", "circle-half-y", "circle-upper"
+]);
+
+export const SUPPORTED_RENDER_METHODS = Object.freeze([
+  "area", "centroid", "inertia", "arc", "surface-x", "surface-y", "pump-bowl", "pool-fill",
+  "goat-barn", "cross-square", "cross-semicircle", "shell-x", "shell-y", "disk-x", "disk-y",
+  "washer-x", "washer-y"
+]);
+
 export function compileCurve(spec) {
   if (!spec) return () => 0;
   switch (spec.t) {
@@ -193,13 +208,12 @@ function compileBound(spec) {
 function resolveOrientation(method, specOrientation) {
   if (method === "shell-x" || method === "disk-y" || method === "washer-y") return "horizontal";
   if (method === "surface-y" && specOrientation === "horizontal") return "horizontal";
+  if (method === "arc") return specOrientation === "horizontal" ? "horizontal" : "vertical";
   if (
     method === "shell-y" ||
     method === "disk-x" ||
     method === "washer-x" ||
     method === "surface-x" ||
-    method === "area" ||
-    method === "arc" ||
     method === "cross-square" ||
     method === "cross-semicircle"
   ) {
@@ -226,7 +240,31 @@ export function buildExampleFromSpec(spec) {
   if (spec.axisLabel) example.axisLabel = spec.axisLabel;
   if (spec.axisX != null) example.axisX = spec.axisX;
   if (spec.axisY != null) example.axisY = spec.axisY;
+  if (spec.bowlRadius != null) example.bowlRadius = Number(spec.bowlRadius);
+  if (spec.bowlCenterY != null) example.bowlCenterY = Number(spec.bowlCenterY);
+  if (spec.spoutHeight != null) example.spoutHeight = Number(spec.spoutHeight);
   if (spec.marker) example.marker = spec.marker;
+  // Composite / cutout metadata for centroid animations (L-shapes, etc.).
+  if (spec.cutout) example.cutout = spec.cutout;
+  if (Array.isArray(spec.parts) && spec.parts.length) example.parts = spec.parts;
+
+  // Breakpoints for piecewise silhouettes (sharp L-corners, step tops).
+  const breaks = [];
+  if (spec.cutout?.xMin != null) breaks.push(Number(spec.cutout.xMin));
+  if (spec.cutout?.xMax != null) breaks.push(Number(spec.cutout.xMax));
+  const collectBreaks = curve => {
+    if (curve?.t === "piecewise" && Array.isArray(curve.segments)) {
+      for (const seg of curve.segments) {
+        if (seg.min != null) breaks.push(Number(seg.min));
+        if (seg.max != null) breaks.push(Number(seg.max));
+      }
+    }
+  };
+  collectBreaks(spec.top);
+  collectBreaks(spec.bottom);
+  if (breaks.length) {
+    example.piecewiseBreaks = [...new Set(breaks.filter(Number.isFinite))];
+  }
 
   if (orientation === "vertical") {
     example.xMin = spec.xMin ?? 0;

@@ -86,11 +86,29 @@ def strip_hyperbolic_expr(expr):
 _orig_sp_latex = sp.latex
 
 
+def polish_student_latex(s: str) -> str:
+    """Map sympy latex quirks to Calc-1 textbook forms."""
+    s = str(s)
+    # Sympy emits \operatorname{asin}; textbooks use \arcsin / \arctan.
+    for a, b in (
+        (r"\operatorname{asin}", r"\arcsin"),
+        (r"\operatorname{acos}", r"\arccos"),
+        (r"\operatorname{atan}", r"\arctan"),
+        (r"\operatorname{asec}", r"\arcsec"),
+        (r"\operatorname{acsc}", r"\arccsc"),
+        (r"\operatorname{acot}", r"\arccot"),
+    ):
+        s = s.replace(a, b)
+    return s
+
+
 def sympy_latex(expr, var=None) -> str:
     e = strip_hyperbolic_expr(expr)
     if var is not None:
-        return _orig_sp_latex(e, symbol_names={var: str(var)})
-    return _orig_sp_latex(e)
+        s = _orig_sp_latex(e, symbol_names={var: str(var)})
+    else:
+        s = _orig_sp_latex(e)
+    return polish_student_latex(s)
 
 
 def _latex_no_hyperbolic(expr, *args, **kwargs):
@@ -99,7 +117,7 @@ def _latex_no_hyperbolic(expr, *args, **kwargs):
             expr = strip_hyperbolic_expr(expr)
     except Exception:
         pass
-    return _orig_sp_latex(expr, *args, **kwargs)
+    return polish_student_latex(_orig_sp_latex(expr, *args, **kwargs))
 
 
 sp.latex = _latex_no_hyperbolic
@@ -120,12 +138,87 @@ def frac_latex(val) -> str:
     return sympy_latex(val)
 
 
+def pedagogical_trig_form(expr, var=x):
+    """Prefer tan/cot over sin/cos ratios; never introduce double-angle forms.
+
+    Sympy's sp.simplify turns 3*tan(x)+cot(x) into -2/tan(2x)+4/sin(2x), which is
+    algebraically fine but wrong for Calc-1 pedagogy and inconsistent with
+    term-by-term integration steps.
+    """
+    try:
+        e = strip_hyperbolic_expr(expr)
+    except Exception:
+        return expr
+    if not hasattr(e, "has"):
+        return e
+    try:
+        # sin/cos ratios → tan/cot (textbook table forms for ∫sec², ∫csc²)
+        s, c = sp.sin(var), sp.cos(var)
+        e = e.replace(s / c, sp.tan(var))
+        e = e.replace(c / s, sp.cot(var))
+        e = e.replace(1 / sp.tan(var), sp.cot(var))
+        e = e.replace(1 / sp.cot(var), sp.tan(var))
+    except Exception:
+        pass
+    try:
+        # Light trig cleanup that does not invent double angles
+        tsimp = sp.trigsimp(e)
+        if _introduces_multi_angle(tsimp, e, var):
+            return e
+        # trigsimp may leave 1/tan — fold again
+        tsimp = tsimp.replace(1 / sp.tan(var), sp.cot(var))
+        tsimp = tsimp.replace(1 / sp.cot(var), sp.tan(var))
+        if _introduces_multi_angle(tsimp, e, var):
+            return e
+        return tsimp
+    except Exception:
+        return e
+
+
+def _introduces_multi_angle(new, old, var) -> bool:
+    """True if new has double/half angles that old did not."""
+    try:
+        angles = (
+            sp.sin(2 * var),
+            sp.cos(2 * var),
+            sp.tan(2 * var),
+            sp.sin(var / 2),
+            sp.cos(var / 2),
+            sp.tan(var / 2),
+        )
+        return any(new.has(a) and not old.has(a) for a in angles)
+    except Exception:
+        return False
+
+
+def safe_simplify_antideriv(expr, var=x):
+    """Simplify an antiderivative without multi-angle or hyperbolic regressions."""
+    e = pedagogical_trig_form(strip_hyperbolic_expr(expr), var)
+    try:
+        s = sp.simplify(e)
+        s = strip_hyperbolic_expr(s)
+        if _introduces_multi_angle(s, e, var):
+            return e
+        # simplify can reintroduce sin/cos ratios or double angles — re-apply pedagogy
+        s = pedagogical_trig_form(s, var)
+        if _introduces_multi_angle(s, e, var):
+            return e
+        return s
+    except Exception:
+        return e
+
+
 def expr_latex(expr, var=x) -> str:
-    return sympy_latex(sp.simplify(expr), var)
+    """Latex for an *integrand* (or setup expression) — simplify is OK here."""
+    try:
+        return sympy_latex(sp.simplify(expr), var)
+    except Exception:
+        return sympy_latex(expr, var)
 
 
 def answer_latex(expr, indefinite=False, var=x) -> str:
-    body = expr_latex(expr, var)
+    """Latex for an *antiderivative* — do not double-angle-simplify."""
+    body = sympy_latex(safe_simplify_antideriv(expr, var), var)
     return body + (" + C" if indefinite else "")
 
 
@@ -197,41 +290,50 @@ def equations_kit(kind: str, setup: str | None = None) -> list[str]:
             r"A=\int_a^b f(x)\,dx\quad(f\ge0)",
         ],
         "area": [
-            r"A=\int_a^b\big[f_{\text{top}}(x)-f_{\text{bottom}}(x)\big]\,dx",
-            r"dA=\big(\text{height}\big)\,dx",
+            r"A=\int_a^b\big[f_{\text{top}}(x)-f_{\text{bottom}}(x)\big]\,dx\quad(\text{vertical strips})",
+            r"A=\int_c^d\big[x_{\text{right}}(y)-x_{\text{left}}(y)\big]\,dy\quad(\text{horizontal strips})",
+            r"dA=(\text{strip length})\times(\text{thickness})",
         ],
         "disk": [
-            r"V=\pi\int_a^b\big[R(x)\big]^2\,dx",
-            r"dV=\pi R^{2}\,dx\quad(R=\text{radius to axis})",
+            r"V=\pi\int_a^b\big[R(x)\big]^2\,dx\quad(\text{vertical slices / about }x\text{-axis})",
+            r"V=\pi\int_c^d\big[R(y)\big]^2\,dy\quad(\text{horizontal slices / about }y\text{-axis})",
+            r"dV=\pi R^{2}\,d(\text{slice})\quad(R=\text{radius to axis})",
         ],
         "washer": [
             r"V=\pi\int_a^b\Big(\big[R_{\text{outer}}\big]^2-\big[R_{\text{inner}}\big]^2\Big)\,dx",
-            r"dV=\pi\big(R_{\text{out}}^2-R_{\text{in}}^2\big)\,dx",
+            r"V=\pi\int_c^d\Big(\big[R_{\text{outer}}\big]^2-\big[R_{\text{inner}}\big]^2\Big)\,dy\quad(\text{horizontal})",
+            r"dV=\pi\big(R_{\text{out}}^2-R_{\text{in}}^2\big)\,d(\text{slice})",
         ],
         "shell": [
-            r"V=2\pi\int_a^b(\text{radius})(\text{height})\,dx",
-            r"dV=2\pi\,r\,h\,dx",
+            r"V=2\pi\int_a^b(\text{radius})(\text{height})\,dx\quad(\text{vertical shells})",
+            r"V=2\pi\int_c^d(\text{radius})(\text{length})\,dy\quad(\text{horizontal shells})",
+            r"dV=2\pi\,r\,h\,d(\text{thickness})",
         ],
         "cross": [
             r"V=\int_a^b A(x)\,dx",
             r"A_{\text{square}}=s^2,\quad A_{\text{semicircle}}=\frac{\pi}{8}d^2",
         ],
         "centroid": [
-            r"A=\int_a^b f(x)\,dx",
-            r"\bar{x}=\frac{1}{A}\int_a^b x\,f(x)\,dx",
-            r"\bar{y}=\frac{1}{A}\int_a^b\frac{1}{2}\big[f(x)\big]^2\,dx",
+            r"A=\int_a^b f(x)\,dx\quad(\text{vertical strips})",
+            r"A=\int_c^d\big[x_R(y)-x_L(y)\big]\,dy\quad(\text{horizontal strips})",
+            r"\bar{x}=\frac{1}{A}\int_a^b x\,f(x)\,dx,\quad\bar{y}=\frac{1}{A}\int_a^b\frac{1}{2}\big[f(x)\big]^2\,dx",
         ],
         "arc": [
             r"L=\int_a^b\sqrt{1+\big[f'(x)\big]^2}\,dx",
             r"ds=\sqrt{1+[y']^2}\,dx",
         ],
         "surface": [
-            r"S=2\pi\int_a^b y\,\sqrt{1+[y']^2}\,dx\quad(\text{about }x\text{-axis})",
+            r"S=2\pi\int_a^b y\,\sqrt{1+[y']^2}\,dx\quad(\text{about }x\text{-axis},\,dx)",
+            r"S=2\pi\int_a^b x\,\sqrt{1+[y']^2}\,dx\quad(\text{about }y\text{-axis},\,dx)",
+            r"S=2\pi\int_c^d x\,\sqrt{1+[x']^2}\,dy\quad(\text{about }y\text{-axis},\,dy)",
+            r"S=2\pi\int_c^d y\,\sqrt{1+[x']^2}\,dy\quad(\text{about }x\text{-axis},\,dy)",
             r"dS=2\pi\,(\text{radius})\,ds",
         ],
         "inertia": [
             r"I_x=\int_a^b\frac{\big[f(x)\big]^3}{3}\,dx\quad(\text{vertical strip to }x\text{-axis})",
-            r"I_y=\int_a^b x^2 f(x)\,dx\quad(\text{about }y\text{-axis})",
+            r"I_y=\int_a^b x^2 f(x)\,dx\quad(\text{vertical strip about }y\text{-axis})",
+            r"I_y=\int_c^d\frac{\big[x_R(y)\big]^3-\big[x_L(y)\big]^3}{3}\,dy\quad(\text{horizontal strip about }y\text{-axis})",
+            r"I_x=\int_c^d y^2\big[x_R(y)-x_L(y)\big]\,dy\quad(\text{horizontal strip about }x\text{-axis})",
         ],
         "work": [
             r"W=\int_a^b F(x)\,dx",
@@ -379,7 +481,25 @@ def eval_antideriv_at(F, var, point, *, side: str = "+"):
 
 
 def real_antiderivative(expr, var):
-    """Indefinite integral, preferring a real (non-Piecewise-complex) branch."""
+    """Indefinite integral, preferring a real Calc-1 form.
+
+    Sums are integrated term-by-term so the combined antiderivative matches the
+    step-by-step writeup (and does not get rewritten as a double-angle identity).
+    """
+    try:
+        expanded = sp.expand(expr)
+    except Exception:
+        expanded = expr
+    terms = list(sp.Add.make_args(expanded))
+    if len(terms) > 1:
+        parts = [_real_antiderivative_single(t, var) for t in terms]
+        F = sp.Add(*parts)
+        return safe_simplify_antideriv(F, var)
+    return _real_antiderivative_single(expanded, var)
+
+
+def _real_antiderivative_single(expr, var):
+    """Indefinite integral of a single term / non-sum."""
     F = sp.integrate(expr, var)
     F = strip_hyperbolic_expr(F)
     if isinstance(F, sp.Piecewise):
@@ -395,8 +515,9 @@ def real_antiderivative(expr, var):
             break
         if chosen is None:
             chosen = F.args[0][0]
-        F = strip_hyperbolic_expr(sp.simplify(chosen))
-    return F
+        # Do NOT full-simplify here — that invents tan(2x) forms.
+        F = strip_hyperbolic_expr(chosen)
+    return safe_simplify_antideriv(F, var)
 
 
 def nice_latex(val) -> str:
@@ -800,12 +921,7 @@ def steps_indefinite(expr, var=x):
     expanded = sp.expand(expr)
     f_tex = expr_latex(expr, var)
     integ = expr_latex(expanded, var)
-    F = strip_hyperbolic_expr(sp.integrate(expanded, var))
-    if isinstance(F, sp.Piecewise):
-        try:
-            F = strip_hyperbolic_expr(sp.simplify(F.args[0][0]))
-        except Exception:
-            pass
+    F = real_antiderivative(expanded, var)
     anti = answer_latex(F, True, var)
     anti_no_c = answer_latex(F, False, var)
     terms = list(sp.Add.make_args(expanded))
@@ -843,11 +959,17 @@ def steps_indefinite(expr, var=x):
             ) + "\\]",
         ))
         term_lines = []
+        term_Fs = []
         for t in terms:
-            Ft = strip_hyperbolic_expr(sp.integrate(t, var))
+            Ft = real_antiderivative(t, var)
+            term_Fs.append(Ft)
             term_lines.append(
                 f"\\[\\int {expr_latex(t, var)}\\,d{v} = {answer_latex(Ft, False, var)}\\]"
             )
+        # Combined form must be the sum of the term antiderivatives (not a rewrite)
+        F = safe_simplify_antideriv(sp.Add(*term_Fs), var)
+        anti = answer_latex(F, True, var)
+        anti_no_c = answer_latex(F, False, var)
         steps.append(step(
             "Integrate each term separately",
             "".join(term_lines),
@@ -863,7 +985,21 @@ def steps_indefinite(expr, var=x):
         ))
 
     try:
-        check = sp.simplify(sp.diff(F, var) - expanded)
+        dF = sp.diff(F, var)
+        check = sp.simplify(dF - expanded)
+        if check != 0:
+            # tan/cot vs sec/csc often need a sin-rewrite to cancel identically
+            for probe in (
+                lambda: sp.trigsimp(check),
+                lambda: sp.simplify((dF - expanded).rewrite(sp.sin)),
+                lambda: sp.simplify((dF - expanded).rewrite(sp.exp)),
+            ):
+                try:
+                    check = probe()
+                    if check == 0:
+                        break
+                except Exception:
+                    continue
         if check == 0:
             steps.append(step(
                 "Check by differentiating",
@@ -974,33 +1110,51 @@ def volume_strategy_steps(method, setup, answer, compute=None, prompt: str = "")
 
 
 def area_strategy_steps(setup, answer, compute=None):
-    """Strategy → define top/bottom/height/limits → build dA → write integral → evaluate."""
+    """Strategy → define top/bottom (or right/left) → build dA → write integral → evaluate."""
     parts = ensure_parts(compute)
     v = _parts_tex(parts.get("var", "x"))
     lo = _parts_tex(parts.get("lo", "a"))
     hi = _parts_tex(parts.get("hi", "b"))
     dv = f"d{v}"
+    horizontal = v == "y" or str(parts.get("orientation", "")).lower() == "horizontal"
 
     # Concrete expressions when available
-    top = parts.get("top")
-    bot = parts.get("bottom")
-    height = parts.get("height")
+    top = parts.get("top") or parts.get("right")
+    bot = parts.get("bottom") or parts.get("left")
+    height = parts.get("height") or parts.get("width") or parts.get("length")
     if height is None and compute and compute.get("expr") is not None:
         height = compute.get("display_integrand") or expr_latex(compute["expr"], compute.get("var", x))
     if height is None:
-        height = "f_{\\text{top}}-f_{\\text{bottom}}"
+        height = (
+            "x_{\\text{right}}-x_{\\text{left}}"
+            if horizontal
+            else "f_{\\text{top}}-f_{\\text{bottom}}"
+        )
     height = _parts_tex(height)
     top_tex = _parts_tex(top) if top is not None else None
     bot_tex = _parts_tex(bot) if bot is not None else ("0" if top is not None else None)
 
     defs = []
-    if top_tex is not None:
-        defs.append((f"f_{{\\text{{top}}}}", top_tex, "upper boundary of the region"))
-    if bot_tex is not None:
-        defs.append((f"f_{{\\text{{bottom}}}}", bot_tex, "lower boundary of the region"))
-    defs.append(("h", height, "strip height (top − bottom, or the single curve above the axis)"))
-    defs.append((dv, dv, "strip width / thickness"))
-    defs.append((v, f"{lo}\\to{hi}", "limits covering the full base of the region"))
+    if horizontal:
+        if top_tex is not None:
+            defs.append((f"x_{{\\text{{right}}}}", top_tex, "right boundary of the region"))
+        if bot_tex is not None:
+            defs.append((f"x_{{\\text{{left}}}}", bot_tex, "left boundary of the region"))
+        defs.append(("w", height, "strip length (right − left)"))
+        defs.append((dv, dv, "horizontal-strip thickness"))
+        defs.append((v, f"{lo}\\to{hi}", "limits covering the full height of the region"))
+        strip_note = "Horizontal strips (integrate with respect to \\(y\\)): length × thickness."
+        dA_note = "Length times thickness for one thin horizontal strip:"
+    else:
+        if top_tex is not None:
+            defs.append((f"f_{{\\text{{top}}}}", top_tex, "upper boundary of the region"))
+        if bot_tex is not None:
+            defs.append((f"f_{{\\text{{bottom}}}}", bot_tex, "lower boundary of the region"))
+        defs.append(("h", height, "strip height (top − bottom, or the single curve above the axis)"))
+        defs.append((dv, dv, "strip width / thickness"))
+        defs.append((v, f"{lo}\\to{hi}", "limits covering the full base of the region"))
+        strip_note = "Vertical strips (integrate with respect to \\(x\\)): height × width."
+        dA_note = "Height times width for one thin vertical strip:"
 
     scale = (compute or {}).get("scale", 1)
     if scale != 1:
@@ -1011,12 +1165,12 @@ def area_strategy_steps(setup, answer, compute=None):
     prefix = [
         step(
             "Strategy: accumulate area with strips",
-            "Draw the region and choose vertical (or horizontal) strips. Area is the continuous sum of strip areas.",
+            f"Draw the region and choose strip direction. {strip_note} Area is the continuous sum of strip areas.",
         ),
         definitions_step(defs),
         build_integrand_step(
-            f"\\[dA=h\\,{dv}=({height})\\,{dv}\\]",
-            "Height times width for one thin strip:",
+            f"\\[dA=({height})\\,{dv}\\]",
+            dA_note,
         ),
     ]
     if compute:
@@ -1751,13 +1905,7 @@ def poly_spec(expr, var=x, x0=0.0, x1=2.0):
 
 
 def make_indefinite(expr, source, title="Antiderivative", difficulty="easy", topic="fundamentals", var=x):
-    F = strip_hyperbolic_expr(sp.integrate(expr, var))
-    # Prefer a single real branch over piecewise complex/hyperbolic forms
-    if isinstance(F, sp.Piecewise):
-        try:
-            F = strip_hyperbolic_expr(sp.simplify(F.args[0][0] if F.args else F))
-        except Exception:
-            pass
+    F = real_antiderivative(expr, var)
     v = str(var)
     integ = expr_latex(expr, var)
     anti = answer_latex(F, True, var)
@@ -1765,7 +1913,7 @@ def make_indefinite(expr, source, title="Antiderivative", difficulty="easy", top
         "source": source,
         "title": title,
         "prompt": prompt_indefinite(expr, var),
-        "choices": wrong_choices("", F, True, var=var),
+        "choices": auto_mc_choices(f"\\int {integ}\\,d{v} = {anti}"),
         "steps": steps_indefinite(expr, var),
         "finalAnswer": f"\\int {integ}\\,d{v} = {anti}",
         "insight": "Antiderivative = reverse of derivative. Integrate term by term, then always keep \\(+C\\). Differentiating your answer should recover the integrand.",
@@ -1778,25 +1926,36 @@ def make_indefinite(expr, source, title="Antiderivative", difficulty="easy", top
 
 
 def make_definite(expr, a, b, source, title="Definite integral", difficulty="easy", topic="area", var=x):
-    F = sp.integrate(expr, var)
-    val = sp.simplify(F.subs(var, b) - F.subs(var, a))
+    F = real_antiderivative(expr, var)
+    try:
+        val = sp.simplify(
+            eval_antideriv_at(F, var, b, side="-") - eval_antideriv_at(F, var, a, side="+")
+        )
+    except Exception:
+        val = sp.simplify(F.subs(var, b) - F.subs(var, a))
+    if is_bad_sympy_value(val):
+        try:
+            val = strip_hyperbolic_expr(sp.simplify(sp.integrate(expr, (var, a, b))))
+        except Exception:
+            pass
     v = str(var)
     integ = expr_latex(expr, var)
     anti = answer_latex(F, False, var)
+    final = f"\\int_{{{frac_latex(a)}}}^{{{frac_latex(b)}}} {integ}\\,d{v} = {nice_latex(val)}"
     problem = {
         "source": source,
         "title": title,
         "prompt": prompt_definite(expr, a, b, var),
-        "choices": wrong_choices("", val, False, a, b, var),
+        "choices": auto_mc_choices(final, {"expr": expr, "a": a, "b": b, "var": var, "scale": 1, "value": val}),
         "steps": steps_definite(expr, a, b, var),
-        "finalAnswer": f"\\int_{{{frac_latex(a)}}}^{{{frac_latex(b)}}} {integ}\\,d{v} = {frac_latex(val)}",
+        "finalAnswer": final,
         "insight": "Definite integral = signed area via the Fundamental Theorem: find any antiderivative \\(F\\), then compute \\(F(\\text{upper})-F(\\text{lower})\\).",
         "visual": "area",
         "difficulty": difficulty,
         "visualParams": infer_visual_params(expr, topic, a, b, var),
         "equations": equations_kit(
             "definite",
-            f"\\[F({v})={anti}\\]\\[\\int_{{{frac_latex(a)}}}^{{{frac_latex(b)}}} {integ}\\,d{v}=F({frac_latex(b)})-F({frac_latex(a)})={frac_latex(val)}\\]",
+            f"\\[F({v})={anti}\\]\\[\\int_{{{frac_latex(a)}}}^{{{frac_latex(b)}}} {integ}\\,d{v}=F({frac_latex(b)})-F({frac_latex(a)})={nice_latex(val)}\\]",
         ),
     }
     return problem
@@ -2137,7 +2296,7 @@ def centroid_problem(i):
         "insight": "Centroid = balance point = average position of area. For simple shapes, use known formulas (triangle: average the vertices; rectangle: midpoint). For general regions, use moments over area.",
         "visual": "centroid",
         "difficulty": diff,
-        "visualParams": {"method": "area", "xMin": 0, "xMax": b, "bottom": {"t": "c", "v": 0}, "top": top, "marker": marker},
+        "visualParams": {"method": "centroid", "xMin": 0, "xMax": b, "bottom": {"t": "c", "v": 0}, "top": top, "marker": marker, "sampleLabel": "sample x", "measureLabel": "strip height"},
         "equations": equations_kit("centroid", setup),
     }
     b = 3 + (i % 7)
@@ -2161,7 +2320,7 @@ def centroid_problem(i):
         "insight": f"{source} — centroid as balance point (Briggs §6.7).",
         "visual": "centroid",
         "difficulty": ["easy", "medium", "hard"][i % 3],
-        "visualParams": {"method": "area", "xMin": 0, "xMax": b, "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": h / b, "b": 0}, "marker": {"x": b / 3, "y": h / 3}},
+        "visualParams": {"method": "centroid", "xMin": 0, "xMax": b, "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": h / b, "b": 0}, "marker": {"x": b / 3, "y": h / 3}, "sampleLabel": "sample x", "measureLabel": "strip height"},
     }
 
 
@@ -2460,6 +2619,7 @@ def application_problem(i):
 
 # Choice cards clutter when latex is long; full form still lives in finalAnswer/steps.
 LONG_CHOICE_CHARS = 52
+CHOICE_EXACT_CHARS = 34
 
 
 def split_labeled_answer(answer: str) -> tuple[str, str]:
@@ -2490,17 +2650,81 @@ def split_labeled_answer(answer: str) -> tuple[str, str]:
     return left + " = ", right
 
 
+_COMPACT_FN = (
+    r"ln|log|sin|cos|tan|cot|sec|csc|"
+    r"arcsin|arccos|arctan|arccot|arcsec|arccsc|"
+    r"sinh|cosh|tanh|exp|det|max|min"
+)
+
+
+def latex_braces_balanced(s: str) -> bool:
+    """True when { } depth never goes negative and ends at 0."""
+    depth = 0
+    for ch in s:
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth < 0:
+                return False
+    return depth == 0
+
+
+def latex_fracs_complete(s: str) -> bool:
+    """Every \\frac must be followed by two brace-groups (num and den)."""
+    i = 0
+    while True:
+        j = s.find("\\frac", i)
+        if j < 0:
+            return True
+        # skip \frac if it is a longer command name (shouldn't happen)
+        k = j + 5
+        # optional * (displaystyle variants rare; ignore)
+        while k < len(s) and s[k].isspace():
+            k += 1
+        for _ in range(2):
+            if k >= len(s) or s[k] != "{":
+                return False
+            depth = 0
+            while k < len(s):
+                if s[k] == "{":
+                    depth += 1
+                elif s[k] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        k += 1
+                        break
+                k += 1
+            else:
+                return False
+            while k < len(s) and s[k].isspace():
+                k += 1
+        i = k
+
+
 def compact_math_latex(latex: str) -> str:
-    """Shorter display latex for MC cards (solution keeps the full sympy form)."""
+    """Shorter display latex for MC cards (solution keeps the full sympy form).
+
+    Never re-introduce hyperbolic names. Do not strip braces that close \\frac.
+
+    Critical: only rewrite complete ``\\fn{(arg)}`` pairs atomically. A two-step
+    open-then-close rewrite previously ate the closing brace of ``\\frac``
+    numerators/denominators, producing KaTeX-red raw strings like
+    ``\\frac{\\ln(2){2}`` instead of ``\\frac{\\ln(2)}{2}``.
+    """
     s = str(latex).strip()
     # Drop size matchers that bloat KaTeX width.
     s = s.replace("\\left", "").replace("\\right", "")
     # Prefer ln in calc context; sympy emits \log.
     s = re.sub(r"\\log(?![a-zA-Z])", r"\\ln", s)
-    # Sympy often emits f{(x)} after stripping \left/\right — normalize to f(x).
-    s = re.sub(r"\{\(\s*", "(", s)
-    s = re.sub(r"\s*\)\}", ")", s)
-    # Collapse spaces around braces a bit.
+    # Atomic only: \fn{(simple arg with no nested parens)} → \fn(arg)
+    # Nested cases keep the sympy ``{(...)}`` form, which KaTeX renders fine.
+    s = re.sub(
+        r"(\\(?:" + _COMPACT_FN + r"))\{\(\s*([^()]*?)\s*\)\}",
+        r"\1(\2)",
+        s,
+    )
+    # Collapse spaces around braces a bit (safe).
     s = re.sub(r"\{\s+", "{", s)
     s = re.sub(r"\s+\}", "}", s)
     s = re.sub(r"\s+", " ", s).strip()
@@ -2537,6 +2761,42 @@ def latex_positive_first(expr) -> str:
         return compact_math_latex(sp.latex(expr))
 
 
+def choice_value_latex(value, *, exact_limit: int = CHOICE_EXACT_CHARS) -> str:
+    """Render a choice value compactly while keeping short exact answers exact.
+
+    The solution retains the full symbolic form.  Cards are a recognition task,
+    though, so nested logarithms/radicals and long pi-products become a readable
+    decimal instead of forcing the learner to parse a wall of algebra.
+    """
+    try:
+        # Values passed here have already been evaluated by _compute_value.
+        # Avoid another global simplify: long symbolic surface/arc answers make
+        # that quadratic in bank-build time.
+        if len(str(value)) > exact_limit * 2:
+            numeric = sp.N(value, 8)
+            if getattr(numeric, "is_real", False):
+                number = float(numeric)
+                if abs(number) < 1e-6:
+                    return "0"
+                if abs(number - round(number)) < 1e-9:
+                    return str(int(round(number)))
+                return f"{number:.5g}"
+        exact = compact_math_latex(sp.latex(value))
+        if len(exact) <= exact_limit:
+            return exact
+        numeric = sp.N(value, 8)
+        if getattr(numeric, "is_real", False):
+            number = float(numeric)
+            if abs(number) < 1e-6:
+                return "0"
+            if abs(number - round(number)) < 1e-9:
+                return str(int(round(number)))
+            return f"{number:.5g}"
+    except Exception:
+        pass
+    return compact_math_latex(sp.latex(value))
+
+
 def format_choice_latex(answer: str, body: str | None = None) -> str:
     """Choice text: drop long 'L =' prefixes; always compact the body."""
     prefix, rhs = split_labeled_answer(answer)
@@ -2547,12 +2807,22 @@ def format_choice_latex(answer: str, body: str | None = None) -> str:
     return body
 
 
+def _choice_key(s: str) -> str:
+    """Normalize for uniqueness: ignore spaces and a leading 'Label =' prefix."""
+    s = str(s).replace(" ", "")
+    # Drop one top-level "X=" / "X_{...}=" label so "S=expr" ≡ "expr"
+    m = re.match(r"^[A-Za-z\\]+(?:_\{[^}]+\})?=", s)
+    if m:
+        s = s[m.end() :]
+    return s
+
+
 def _choice_unique(candidates: list[str], correct: str) -> list[str]:
     """Return up to 3 wrong latex strings, distinct from correct and each other."""
     out: list[str] = []
-    seen = {correct.replace(" ", "")}
+    seen = {_choice_key(correct)}
     for c in candidates:
-        key = c.replace(" ", "")
+        key = _choice_key(c)
         if not c or key in seen:
             continue
         seen.add(key)
@@ -2596,7 +2866,7 @@ def short_distractors_from_compute(compute: dict | None) -> list[str]:
         for term in (span, upper_only, lower_only, half, doubled, swapped):
             if is_bad_sympy_value(term):
                 continue
-            lx = latex_positive_first(term)
+            lx = choice_value_latex(term)
             if "NaN" in lx or "nan" in lx.lower():
                 continue
             # Prefer genuinely short distractors for the card grid.
@@ -2614,7 +2884,7 @@ def choice_body_from_compute(compute: dict | None) -> str | None:
     if not compute:
         return None
     try:
-        body = latex_positive_first(_compute_value(compute))
+        body = choice_value_latex(_compute_value(compute))
         return body or None
     except Exception:
         return None
@@ -2631,7 +2901,10 @@ def auto_mc_choices(answer: str, compute: dict | None = None) -> list[dict]:
     prefix, rhs = split_labeled_answer(answer)
     body = choice_body_from_compute(compute) or compact_math_latex(rhs)
     correct = format_choice_latex(answer, body)
-    long = len(body) >= LONG_CHOICE_CHARS
+    # Nested \frac{\frac{a}{b}}{2} is hard to read on cards — treat frac-heavy
+    # bodies like long answers and prefer short conceptual distractors.
+    frac_heavy = body.count("\\frac") >= 1 and len(body) >= 18
+    long = len(body) >= LONG_CHOICE_CHARS or frac_heavy
 
     candidates: list[str] = []
     if long:
@@ -2644,11 +2917,31 @@ def auto_mc_choices(answer: str, compute: dict | None = None) -> list[dict]:
             "\\sqrt{2}",
         ])
     else:
+        # Prefer sympy half when compute is available (clean \frac{25}{4} not nested).
+        half_body = None
+        if compute is not None:
+            try:
+                half_body = choice_value_latex(sp.simplify(_compute_value(compute) / 2))
+            except Exception:
+                half_body = None
+        if not half_body:
+            half_body = (
+                f"\\frac{{1}}{{2}}\\left({body}\\right)"
+                if "\\frac" in body
+                else f"\\frac{{{body}}}{{2}}"
+            )
+        if compute is not None:
+            try:
+                twice_body = choice_value_latex(2 * _compute_value(compute))
+            except Exception:
+                twice_body = f"2\\left({body}\\right)"
+        else:
+            twice_body = f"2\\left({body}\\right)"
         candidates = [
-            format_choice_latex(answer, f"2\\left({body}\\right)"),
-            format_choice_latex(answer, f"\\frac{{{body}}}{{2}}"),
+            format_choice_latex(answer, twice_body),
+            format_choice_latex(answer, half_body),
         ]
-        # Prefer a distinct third: drop a π factor cleanly (never leave "2 1").
+        # Prefer a distinct third: drop a π factor cleanly (never leave "2 1" or "frac").
         if "\\pi" in body:
             stripped = body
             stripped = re.sub(r"\\cdot\s*\\pi", "", stripped)
@@ -2656,9 +2949,22 @@ def auto_mc_choices(answer: str, compute: dict | None = None) -> list[dict]:
             stripped = re.sub(r"\\pi", "", stripped)
             stripped = re.sub(r"\s{2,}", " ", stripped)
             stripped = re.sub(r"\(\s*\)", "", stripped)
-            stripped = stripped.strip(" +·\\cdot")
-            stripped = re.sub(r"\{\s*\}", "", stripped).strip()
-            if stripped and stripped not in ("", body, correct):
+            # Clean empty braces / stray ops — do NOT use str.strip("\\...") which eats backslashes.
+            stripped = re.sub(r"\{\s*\}", "", stripped)
+            stripped = re.sub(r"\{\s+", "{", stripped)
+            stripped = re.sub(r"\s+\}", "}", stripped)
+            stripped = re.sub(r"^\s*[+·]\s*", "", stripped)
+            stripped = re.sub(r"\s*[+·]\s*$", "", stripped)
+            stripped = stripped.strip()
+            # Reject debris like "V = \frac{4}" (denom was only \pi) or "2 1".
+            if (
+                stripped
+                and stripped not in ("", body, correct)
+                and "NaN" not in stripped
+                and latex_braces_balanced(stripped)
+                and latex_fracs_complete(stripped)
+                and not re.search(r"\b\d\s+\d\b", stripped)
+            ):
                 candidates.append(format_choice_latex(answer, stripped))
         elif prefix and body != correct:
             candidates.append(body)
@@ -2686,6 +2992,28 @@ def mc_choices(answer, wrong1, wrong2, wrong3):
         {"id": "c", "latex": wrong2, "label": "Missing factor or bound"},
         {"id": "d", "latex": wrong3, "label": "Arithmetic/axis slip"},
     ]
+
+
+def double_latex(body: str) -> str:
+    """Readable 2× distractor (no label wrap)."""
+    body = compact_math_latex(body)
+    return f"2\\left({body}\\right)"
+
+
+def half_latex(body: str) -> str:
+    """Readable ½ distractor — never nest as \\frac{\\frac{a}{b}}{2}."""
+    body = compact_math_latex(body)
+    if "\\frac" in body:
+        return f"\\frac{{1}}{{2}}\\left({body}\\right)"
+    return f"\\frac{{{body}}}{{2}}"
+
+
+def half_value_latex(val) -> str:
+    """Half of a sympy value as clean latex (preferred when available)."""
+    try:
+        return nice_latex(sp.simplify(val / 2))
+    except Exception:
+        return half_latex(nice_latex(val))
 
 
 def expand_custom_steps(setup, answer, visual, visual_params=None, prompt="", compute=None):
@@ -2754,13 +3082,14 @@ def custom_problem(source, title, prompt, answer, setup, visual, difficulty, vis
 
 
 def catalog_area_varied():
-    """10 distinct area concepts; 20 easy / 20 medium / 10 hard; avoid pure linear-only banks."""
+    """12 distinct area concepts (incl. horizontal strips); 20 easy / 20 medium / 10 hard."""
     out = []
+    N_AREA = 14
     for i in range(PER_TOPIC):
-        case = i % 10
+        case = i % N_AREA
         diff = difficulty_for_index(i)
         tier = difficulty_tier(diff)
-        rep = (i // 10) % 2
+        rep = (i // N_AREA) % 2
         source = f"OpenStax Vol. 1 §5.2 / Briggs §5.3 area concept {case + 1}, item {i + 1}"
         compute = None
         if case == 0:
@@ -2918,8 +3247,8 @@ def catalog_area_varied():
                 "expr": f, "a": lo, "b": hi, "label": "A",
                 "parts": {"top": expr_latex(f), "bottom": "0", "height": expr_latex(f), "var": "x"},
             }
-        else:
-            # Piecewise lower boundary
+        elif case == 9:
+            # Piecewise lower boundary (vertical strips)
             k = 3 + tier + rep
             top_y = 5 + tier + rep
             mid = 1 + tier
@@ -2955,36 +3284,182 @@ def catalog_area_varied():
             ] + piece2 + [
                 step("Add the two pieces", f"\\[A=A_1+A_2={nice_latex(sp.simplify(val))}\\]"),
             ]
+            val_s = sp.simplify(val)
+            ans = f"A = {nice_latex(val_s)}"
             out.append({
                 "source": source, "title": "Area", "prompt": prompt,
                 "choices": mc_choices(
-                    f"A = {sp.latex(sp.simplify(val))}",
-                    f"2\\left({sp.latex(sp.simplify(val))}\\right)",
-                    f"\\frac{{{sp.latex(sp.simplify(val))}}}{{2}}",
-                    sp.latex(sp.simplify(val + 1)),
+                    ans,
+                    double_latex(nice_latex(val_s)),
+                    half_value_latex(val_s),
+                    nice_latex(sp.simplify(val_s + 1)),
                 ),
-                "steps": steps, "finalAnswer": f"A = {sp.latex(sp.simplify(val))}",
+                "steps": steps, "finalAnswer": ans,
                 "insight": "Area is accumulated height × width. Between two curves use (top − bottom); split the integral if the top or bottom formula changes.",
                 "visual": "area", "difficulty": diff, "visualParams": vp,
                 "equations": equations_kit("area", setup),
             })
             continue
+        elif case == 10:
+            # Horizontal strips: region between x = y^2 and x = c
+            c = 4 + tier + rep
+            hi = int(sp.sqrt(c))
+            # ensure hi^2 <= c; pick c as perfect square for clean bounds
+            hi = 2 + tier
+            c = hi * hi
+            width = c - y**2
+            val = sp.integrate(width, (y, 0, hi))
+            prompt = (
+                f"Use horizontal strips to find the area of the region bounded by "
+                f"\\(x=y^2\\), \\(x={c}\\), and \\(y=0\\)."
+            )
+            setup = (
+                f"At height \\(y\\), strip length is right − left: "
+                f"\\[A=\\int_0^{{{hi}}}\\big({c}-y^2\\big)\\,dy\\]"
+            )
+            vp = {
+                "method": "area",
+                "orientation": "horizontal",
+                "yMin": 0,
+                "yMax": hi,
+                "xMin": 0,
+                "xMax": c,
+                "left": {"t": "pow", "a": 1, "n": 2},  # x = y^2 shown via inverse visual when supported
+                "right": {"t": "c", "v": c},
+                "bottom": {"t": "c", "v": 0},
+                "top": {"t": "sqrt", "a": 1},  # y = √x for vertical-fallback plot of same region
+            }
+            compute = {
+                "expr": width, "a": 0, "b": hi, "var": y, "label": "A",
+                "parts": {
+                    "right": str(c), "left": "y^{2}", "width": f"{c}-y^{{2}}",
+                    "height": f"{c}-y^{{2}}", "var": "y", "lo": 0, "hi": hi,
+                    "orientation": "horizontal",
+                },
+                "display_integrand": f"{c}-y^{{2}}",
+            }
+        elif case == 12:
+            # Signed versus geometric area: the curve crosses the axis twice.
+            # This is the distinction students often miss when they treat every
+            # definite integral as an ordinary (nonnegative) area.
+            f = sp.sin(x) - sp.Rational(1, 2)
+            p, q = sp.pi / 6, 5 * sp.pi / 6
+            signed = sp.integrate(f, (x, 0, sp.pi))
+            geometric = sp.simplify(
+                sp.integrate(-f, (x, 0, p))
+                + sp.integrate(f, (x, p, q))
+                + sp.integrate(-f, (x, q, sp.pi))
+            )
+            prompt = (
+                "Find the total geometric area between "
+                "\(y=\\sin x-\\frac12\) and the \(x\)-axis on \([0,\\pi]\). "
+                "The curve changes sign, so split at its zeros."
+            )
+            setup = (
+                "Zeros occur at \(x=\\frac{\\pi}{6},\\frac{5\\pi}{6}\): "
+                "\[A=\\int_0^{\\pi/6}(-f)dx+\\int_{\\pi/6}^{5\\pi/6}f\\,dx+"
+                "\\int_{5\\pi/6}^{\\pi}(-f)dx\]"
+            )
+            steps = [
+                step("Strategy: separate signed pieces", "A geometric area is always positive. Where \(f(x)<0\), use \(-f(x)\) before adding."),
+                step("Find the crossings", "Solve \(\\sin x-\\frac12=0\) on \([0,\\pi]\): \(x=\\frac{\\pi}{6},\\frac{5\\pi}{6}\)."),
+                step("Evaluate the three pieces", f"\[A={nice_latex(geometric)}\]"),
+                step("Signed-area check", f"The signed integral would be \(\\int_0^\\pi f(x)dx={nice_latex(signed)}\), which is different from the geometric area."),
+            ]
+            ans = f"A = {nice_latex(geometric)}"
+            out.append({
+                "source": source, "title": "Area", "prompt": prompt,
+                "choices": mc_choices(ans, f"{nice_latex(signed)}", f"{nice_latex(geometric / 2)}", f"{nice_latex(2 * geometric)}"),
+                "steps": steps, "finalAnswer": ans,
+                "insight": "Definite integrals give signed area. For total geometric area, split at every x-intercept and reverse the sign on below-axis pieces.",
+                "visual": "area", "difficulty": diff,
+                "visualParams": {"method": "area", "xMin": 0, "xMax": float(sp.pi), "bottom": {"t": "c", "v": 0}, "top": {"t": "sin", "a": 1, "b": -0.5}},
+                "equations": equations_kit("area", setup),
+            })
+            continue
+        elif case == 13:
+            # A compact comparison problem: net change can vanish even when
+            # the total geometric area is nonzero.
+            f = x - 2
+            signed = sp.integrate(f, (x, 0, 4))
+            geometric = sp.integrate(-f, (x, 0, 2)) + sp.integrate(f, (x, 2, 4))
+            prompt = (
+                "For \(y=x-2\) on \([0,4]\), find both the signed area and the "
+                "total geometric area relative to the \(x\)-axis."
+            )
+            setup = "\[A_{\\mathrm{signed}}=\\int_0^4(x-2)dx,\\quad A_{\\mathrm{total}}=\\int_0^2(2-x)dx+\\int_2^4(x-2)dx\]"
+            ans = f"(A_{{\\mathrm{{signed}}}},A_{{\\mathrm{{total}}}})=({signed},{geometric})"
+            steps = [
+                step("Locate the sign change", "The line crosses the axis at \(x=2\), so the total area needs two pieces."),
+                step("Net signed area", f"\[A_{{\\mathrm{{signed}}}}=\\int_0^4(x-2)dx={signed}\]"),
+                step("Total geometric area", f"\[A_{{\\mathrm{{total}}}}=\\int_0^2(2-x)dx+\\int_2^4(x-2)dx={geometric}\]"),
+            ]
+            out.append({
+                "source": source, "title": "Area", "prompt": prompt,
+                "choices": mc_choices(ans, "(0,0)", "(4,0)", "(0,2)"),
+                "steps": steps, "finalAnswer": ans,
+                "insight": "Signed area measures cancellation; geometric area measures total magnitude. They agree only when the integrand keeps one sign.",
+                "visual": "area", "difficulty": diff,
+                "visualParams": {"method": "area", "xMin": 0, "xMax": 4, "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": 1, "b": -2}},
+                "equations": equations_kit("area", setup),
+            })
+            continue
+        else:
+            # Horizontal strips: between x = y and x = m (line) / parabola-friendly
+            m = 2 + tier + rep
+            # region: x = y^2 (left) and x = m y (right) from y=0 to y=m
+            left_x = y**2
+            right_x = m * y
+            hi = m
+            width = right_x - left_x
+            val = sp.integrate(width, (y, 0, hi))
+            prompt = (
+                f"Use horizontal strips to find the area enclosed by "
+                f"\\(x=y^2\\) and \\(x={m}y\\)."
+            )
+            setup = (
+                f"Intersections at \\(y=0\\) and \\(y={m}\\). Horizontal strip length "
+                f"\\({m}y-y^2\\): \\[A=\\int_0^{{{m}}}({m}y-y^2)\\,dy\\]"
+            )
+            vp = {
+                "method": "area",
+                "orientation": "horizontal",
+                "yMin": 0,
+                "yMax": m,
+                "xMin": 0,
+                "xMax": m * m,
+                "left": {"t": "pow", "a": 1, "n": 2},
+                "right": {"t": "lin", "a": m},
+                "bottom": {"t": "c", "v": 0},
+                "top": {"t": "lin", "a": m},  # y = x/m vertical view of same enclosure with y=x^2
+            }
+            # also valid as vertical: between y=x/m and y=√x — keep horizontal setup primary
+            compute = {
+                "expr": width, "a": 0, "b": hi, "var": y, "label": "A",
+                "parts": {
+                    "right": f"{m}y", "left": "y^{2}", "width": f"{m}y-y^{{2}}",
+                    "height": f"{m}y-y^{{2}}", "var": "y", "lo": 0, "hi": hi,
+                    "orientation": "horizontal",
+                },
+                "display_integrand": f"{m}y-y^{{2}}",
+            }
         out.append(custom_problem(
             source, "Area", prompt, f"A = {sp.latex(sp.simplify(val))}", setup, "area", diff, vp,
-            "Area is accumulated height × width. Between two curves use (top − bottom); split the integral if the top or bottom formula changes.",
+            "Area is accumulated strip length × thickness. Vertical strips use (top − bottom) dx; horizontal strips use (right − left) dy.",
             compute=compute,
         ))
     return out
 
 
 def catalog_volumes_varied():
-    """10 distinct volume methods; prefer curves over pure y=ax; 20/20/10 difficulty."""
+    """12 distinct volume methods incl. horizontal (dy) slices; 20/20/10 difficulty."""
     out = []
+    N_VOL = 12
     for i in range(PER_TOPIC):
-        case = i % 10
+        case = i % N_VOL
         diff = difficulty_for_index(i)
         tier = difficulty_tier(diff)
-        rep = (i // 10) % 2
+        rep = (i // N_VOL) % 2
         source = f"OpenStax Vol. 1 §6.2 / Briggs §6.3-6.4 volume concept {case + 1}, item {i + 1}"
         bnd = 1 + tier + rep
         compute = None
@@ -3192,7 +3667,7 @@ def catalog_volumes_varied():
                 "display_integrand": f"x({expr_latex(height)})", "setup_display": setup, "keep_scale_inside": True,
                 "parts": {"r": "x", "h": expr_latex(height), "var": "x", "lo": 0, "hi": hi},
             }
-        else:
+        elif case == 9:
             # Disk with square-root radius about x-axis
             a = 1 + tier + rep
             hi = 2 + tier
@@ -3210,208 +3685,502 @@ def catalog_volumes_varied():
                 "display_integrand": f"({r_tex})^{{2}}", "setup_display": setup, "keep_scale_inside": True,
                 "parts": {"R": r_tex, "var": "x", "lo": 0, "hi": hi},
             }
+        elif case == 10:
+            # Horizontal disks about y-axis: x = g(y) (e.g. x = √y or x = y/m)
+            m = 1 + tier + rep
+            hi = 1 + tier + rep
+            # x = √(m y) or simply x = √y scaled: region under y = x^2/m from x=0 to √(m*hi)
+            # With dy: R = x = √(m y) on y in [0, hi] if y = x^2/m → x = √(m y)
+            g = sp.sqrt(m * y)
+            r_tex = f"\\sqrt{{{m}y}}" if m != 1 else "\\sqrt{y}"
+            x_eq = r_tex
+            ans = sp.pi * sp.integrate(g**2, (y, 0, hi))
+            prompt = (
+                f"Use horizontal disks: rotate the region bounded by \\(x={x_eq}\\), "
+                f"\\(y=0\\), and \\(y={hi}\\) about the \\(y\\)-axis."
+            )
+            setup = (
+                f"\\[V=\\pi\\int_0^{{{hi}}}\\big({r_tex}\\big)^2\\,dy="
+                f"\\pi\\int_0^{{{hi}}}{m}y\\,dy\\]" if m != 1 else
+                f"\\[V=\\pi\\int_0^{{{hi}}}\\big(\\sqrt{{y}}\\big)^2\\,dy=\\pi\\int_0^{{{hi}}}y\\,dy\\]"
+            )
+            vp = {
+                "method": "disk-y",
+                "orientation": "horizontal",
+                "axisX": 0,
+                "axisLabel": "x = 0",
+                "yMin": 0,
+                "yMax": hi,
+                "xMin": 0,
+                "xMax": float(sp.sqrt(m * hi)),
+                "left": {"t": "c", "v": 0},
+                "right": {"t": "sqrt", "a": sp.sqrt(m) if m != 1 else 1},
+                "bottom": {"t": "c", "v": 0},
+                "top": {"t": "pow", "a": 1 / m if m else 1, "n": 2},
+            }
+            compute = {
+                "expr": g**2, "a": 0, "b": hi, "var": y, "label": "V", "scale": sp.pi,
+                "display_integrand": f"({r_tex})^{{2}}", "setup_display": setup, "keep_scale_inside": True,
+                "parts": {"R": r_tex, "var": "y", "lo": 0, "hi": hi},
+            }
+        else:
+            # Horizontal washers / shells about x-axis with dy: region between x=y and x=√y style
+            # Region: y = x and y = x^2 on [0,1] → with dy: x_right = √y, x_left = y
+            # About x-axis with shells (horizontal strips // x-axis): r = y, h = √y - y
+            hi = 1
+            height = sp.sqrt(y) - y
+            if tier >= 1:
+                # scale: between y = x/m and y = x^2 → x = m y and x = √y, intersections 0 and 1/m^2? 
+                # Keep classic y=x, y=x^2 about x-axis with horizontal shells
+                pass
+            ans = 2 * sp.pi * sp.integrate(y * height, (y, 0, hi))
+            prompt = (
+                "Use horizontal cylindrical shells to rotate the region between "
+                "\\(y=x\\) and \\(y=x^2\\) about the \\(x\\)-axis."
+            )
+            setup = (
+                "Solve for \\(x\\): right \\(x=\\sqrt{y}\\), left \\(x=y\\). "
+                f"\\[V=2\\pi\\int_0^{{{hi}}}y\\big(\\sqrt{{y}}-y\\big)\\,dy\\]"
+            )
+            vp = {
+                "method": "shell-x",
+                "orientation": "horizontal",
+                "axisY": 0,
+                "axisLabel": "y = 0",
+                "yMin": 0,
+                "yMax": hi,
+                "xMin": 0,
+                "xMax": 1,
+                "left": {"t": "lin", "a": 1},
+                "right": {"t": "sqrt", "a": 1},
+                "bottom": {"t": "c", "v": 0},
+                "top": {"t": "lin", "a": 1},
+            }
+            compute = {
+                "expr": y * height, "a": 0, "b": hi, "var": y, "label": "V", "scale": 2 * sp.pi,
+                "display_integrand": "y(\\sqrt{y}-y)", "setup_display": setup, "keep_scale_inside": True,
+                "parts": {"r": "y", "h": "\\sqrt{y}-y", "var": "y", "lo": 0, "hi": hi},
+            }
         out.append(custom_problem(
             source, "Volume", prompt, f"V = {sp.latex(sp.simplify(ans))}", setup, "volume", diff, vp,
-            "Pick disks/washers (slices ⊥ axis) or shells (slices ∥ axis). Radius is distance to the axis; if there is a hole, subtract inner radius squared.",
+            "Pick disks/washers (slices ⊥ axis) or shells (slices ∥ axis). Horizontal strips integrate with dy; vertical strips with dx.",
             compute=compute,
         ))
     return out
 
 
 def catalog_applications_varied():
-    """12 application concepts; parameters scale with difficulty tier; 20/20/10 mix."""
+    """48 varied application concepts, including modeling and decision problems."""
     out = []
+    N_APP = 48
     for i in range(PER_TOPIC):
-        case = i % 12
+        case = i % N_APP
         diff = difficulty_for_index(i)
         tier = difficulty_tier(diff)
-        rep = (i // 12) % 2
-        j = tier + rep  # scale numbers with difficulty
+        rep = (i // N_APP) % 2
+        j = tier + rep
         source = f"OpenStax Vol. 1 §6.5 / Briggs application concept {case + 1}, item {i + 1}"
         compute = None
+        label = "W"
+        units_insight = (
+            "Word problems: decide what accumulates (work, distance, volume, energy). "
+            "If force, lift, or rate changes, write a thin-slice integral."
+        )
+        visual_kind = "area"
+
+        # --- Springs (0–3) ---
         if case == 0:
             k = 40 + 20 * tier + 10 * rep
-            if tier == 0:
-                d = sp.Rational(1, 4)
-                lo = 0
-            elif tier == 1:
-                d = sp.Rational(1, 2)
-                lo = 0
-            else:
-                # stretch from already-stretched position a → b
-                lo = sp.Rational(1, 4)
-                d = sp.Rational(3, 4)
-            W = sp.integrate(k * x, (x, lo, d))
-            if lo == 0:
-                prompt = f"A spring with \\(k={k}\\) N/m is stretched \\({sp.latex(d)}\\) m from natural length. Find the work."
-                setup = f"\\[W=\\int_0^{{{sp.latex(d)}}}{k}x\\,dx\\]"
-            else:
-                prompt = (
-                    f"A spring with \\(k={k}\\) N/m is already stretched \\({sp.latex(lo)}\\) m. "
-                    f"Find the work to stretch it further to \\({sp.latex(d)}\\) m."
-                )
-                setup = f"\\[W=\\int_{{{sp.latex(lo)}}}^{{{sp.latex(d)}}}{k}x\\,dx\\]"
-            vp = {"method": "area", "xMin": float(lo), "xMax": float(d), "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": k}}
-            compute = {
-                "expr": k * x, "a": lo, "b": d, "label": "W", "units": "J",
-                "parts": {"k": k, "var": "x"},
-            }
+            d = [sp.Rational(1, 4), sp.Rational(1, 2), sp.Rational(3, 4)][tier]
+            W = sp.integrate(k * x, (x, 0, d))
+            prompt = f"A spring with \\(k={k}\\) N/m is stretched \\({sp.latex(d)}\\) m from natural length. Find the work."
+            setup = f"\\[W=\\int_0^{{{sp.latex(d)}}}{k}x\\,dx\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": float(d), "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": k}}
+            compute = {"expr": k * x, "a": 0, "b": d, "label": "W", "units": "J", "parts": {"k": k, "var": "x"}}
         elif case == 1:
-            if tier == 0:
-                F = 20 + 5 * rep + (3 + rep) * x
-            elif tier == 1:
-                F = 15 + 4 * x + x**2
-            else:
-                F = 10 * sp.sqrt(x + 1) + (2 + rep) * x
+            k = 50 + 15 * tier + 5 * rep
+            lo, hi = sp.Rational(1, 4), sp.Rational(1, 2) + sp.Rational(tier, 4)
+            W = sp.integrate(k * x, (x, lo, hi))
+            prompt = (
+                f"A spring with \\(k={k}\\) N/m is already stretched \\({sp.latex(lo)}\\) m. "
+                f"Find the work to stretch it further to \\({sp.latex(hi)}\\) m."
+            )
+            setup = f"\\[W=\\int_{{{sp.latex(lo)}}}^{{{sp.latex(hi)}}}{k}x\\,dx\\]"
+            vp = {"method": "area", "xMin": float(lo), "xMax": float(hi), "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": k}}
+            compute = {"expr": k * x, "a": lo, "b": hi, "label": "W", "units": "J"}
+        elif case == 2:
+            k = 80 + 20 * tier
+            d = sp.Rational(1, 5) + sp.Rational(rep, 10)
+            W = sp.integrate(k * x, (x, 0, d))
+            prompt = f"Compress a spring with \\(k={k}\\) N/m a distance \\({sp.latex(d)}\\) m from equilibrium. Find the work."
+            setup = f"Hooke still gives \\(F=kx\\): \\[W=\\int_0^{{{sp.latex(d)}}}{k}x\\,dx\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": float(d), "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": k}}
+            compute = {"expr": k * x, "a": 0, "b": d, "label": "W", "units": "J"}
+        elif case == 3:
+            k = 100 + 25 * tier + 10 * rep
+            lo, hi = sp.Rational(1, 5), 1
+            W = sp.integrate(k * x, (x, lo, hi))
+            prompt = (
+                f"A spring (\\(k={k}\\) N/m) is stretched from \\({sp.latex(lo)}\\) m past natural length "
+                f"to \\({hi}\\) m past natural length. Find the work."
+            )
+            setup = f"\\[W=\\int_{{{sp.latex(lo)}}}^{{{hi}}}{k}x\\,dx\\]"
+            vp = {"method": "area", "xMin": float(lo), "xMax": float(hi), "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": k}}
+            compute = {"expr": k * x, "a": lo, "b": hi, "label": "W", "units": "J"}
+
+        # --- Variable force (4–9) ---
+        elif case == 4:
+            F = (20 + 5 * j) + (3 + j) * x
             d = 3 + tier + rep
             W = sp.integrate(F, (x, 0, d))
             prompt = f"A variable force \\(F(x)={expr_latex(F)}\\) N moves an object from \\(0\\) to \\({d}\\) m. Find the work."
             setup = f"\\[W=\\int_0^{{{d}}}({expr_latex(F)})\\,dx\\]"
-            vp = {"method": "area", "xMin": 0, "xMax": d, "bottom": {"t": "c", "v": 0}, "top": {"t": "poly", "k": [20, 3]}}
-            compute = {
-                "expr": F, "a": 0, "b": d, "label": "W", "units": "J",
-                "parts": {"var": "x"},
-                "display_integrand": expr_latex(F),
-            }
-        elif case == 2:
-            width, depth = 2 + tier + rep, 2 + tier
-            if tier < 2:
-                W = sp.Rational(9800 * width * depth**2, 2)
-                prompt = (
-                    f"A rectangular tank is \\({width}\\) m wide and filled to depth \\({depth}\\) m. "
-                    f"Pump water to the top edge. Find the work (\\(\\rho g=9800\\))."
-                )
-                setup = f"\\[W=9800\\int_0^{{{depth}}}{width}({depth}-y)\\,dy\\]"
-                compute = {
-                    "expr": width * (depth - y), "a": 0, "b": depth, "var": y,
-                    "label": "W", "scale": 9800, "units": "J",
-                    "parts": {
-                        "A": str(width), "lift": f"{depth}-y", "rhog": "9800", "var": "y",
-                    },
-                    "display_integrand": f"{width}({depth}-y)",
-                }
-            else:
-                # pump over the top to a spout h above
-                spout = 1 + rep
-                W = 9800 * sp.integrate(width * (depth - y + spout), (y, 0, depth))
-                prompt = (
-                    f"A rectangular tank is \\({width}\\) m wide, filled to depth \\({depth}\\) m. "
-                    f"Pump water to a spout \\({spout}\\) m above the top edge (\\(\\rho g=9800\\)). Find the work."
-                )
-                setup = f"\\[W=9800\\int_0^{{{depth}}}{width}({depth}+{spout}-y)\\,dy\\]"
-                compute = {
-                    "expr": width * (depth + spout - y), "a": 0, "b": depth, "var": y,
-                    "label": "W", "scale": 9800, "units": "J",
-                    "parts": {
-                        "A": str(width), "lift": f"{depth}+{spout}-y", "rhog": "9800", "var": "y",
-                    },
-                    "display_integrand": f"{width}({depth}+{spout}-y)",
-                }
-            vp = {"method": "area", "xMin": 0, "xMax": depth, "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": -width, "b": width * depth}}
-        elif case == 3:
-            L, rho = 8 + 2 * tier + rep, 2 + tier
-            if tier < 2:
-                W = sp.Rational(rho * L**2, 2)
-                prompt = f"A rope of length \\({L}\\) m weighs \\({rho}\\) N/m. How much work lifts the whole rope to the top?"
-                setup = f"\\[W=\\int_0^{{{L}}}{rho}y\\,dy\\]"
-                compute = {
-                    "expr": rho * y, "a": 0, "b": L, "var": y, "label": "W", "units": "J",
-                    "parts": {"rho": rho, "lift": "y", "var": "y"},
-                    "display_integrand": f"{rho}y",
-                }
-            else:
-                # lift only half the rope
-                half = L // 2
-                W = sp.integrate(rho * y, (y, 0, half)) + rho * (L - half) * half
-                # simpler exact: hanging rope, lift until half is up — use full for reliability
-                W = sp.integrate(rho * y, (y, 0, L))  # full lift still; prompt harder setup
-                prompt = (
-                    f"A rope of length \\({L}\\) m and linear density \\({rho}\\) N/m hangs over a building. "
-                    f"Find the work to pull the entire rope to the top."
-                )
-                setup = f"\\[W=\\int_0^{{{L}}}{rho}y\\,dy\\]"
-                compute = {
-                    "expr": rho * y, "a": 0, "b": L, "var": y, "label": "W", "units": "J",
-                    "parts": {"rho": rho, "lift": "y", "var": "y"},
-                    "display_integrand": f"{rho}y",
-                }
-            vp = {"method": "area", "xMin": 0, "xMax": L, "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": rho}}
-        elif case == 4:
-            if tier == 0:
-                v = (4 + rep) + (2 + rep) * t
-            elif tier == 1:
-                v = (3 + rep) * t + t**2
-            else:
-                v = (2 + rep) * sp.sin(t) + 3
-            T = sp.pi if tier == 2 else (3 + tier + rep)
-            dist = sp.integrate(v, (t, 0, T))
-            prompt = f"Velocity is \\(v(t)={expr_latex(v, t)}\\) m/s for \\(0\\le t\\le {sp.latex(T)}\\). Find distance traveled."
-            setup = f"\\[s=\\int_0^{{{sp.latex(T)}}}({expr_latex(v, t)})\\,dt\\]"
-            W = dist
-            vp = {"method": "area", "xMin": 0, "xMax": float(T.evalf() if hasattr(T, "evalf") else T), "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": 2, "b": 4}}
-            compute = {
-                "expr": v, "a": 0, "b": T, "var": t, "label": "s", "units": "m",
-                "parts": {"var": "t"},
-                "display_integrand": expr_latex(v, t),
-            }
+            vp = {"method": "area", "xMin": 0, "xMax": d, "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": 3 + j, "b": 20 + 5 * j}}
+            compute = {"expr": F, "a": 0, "b": d, "label": "W", "units": "J", "display_integrand": expr_latex(F)}
         elif case == 5:
-            rate, T = 4 + 2 * tier + rep, 4 + 2 * tier
-            if tier < 2:
-                f = rate * (1 + t / T)
-            else:
-                f = rate * sp.exp(-t / T)
-            W = sp.integrate(f, (t, 0, T))
-            prompt = f"A flow rate is \\({expr_latex(f, t)}\\) L/min for \\(0\\le t\\le {T}\\). Find total volume delivered."
-            setup = f"\\[Q=\\int_0^{{{T}}}{expr_latex(f, t)}\\,dt\\]"
-            vp = {"method": "area", "xMin": 0, "xMax": T, "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": rate / T, "b": rate}}
-            compute = {"expr": f, "a": 0, "b": T, "var": t, "label": "Q"}
+            F = 10 + 4 * x + x**2
+            d = 2 + tier + rep
+            W = sp.integrate(F, (x, 0, d))
+            prompt = f"Force \\(F(x)={expr_latex(F)}\\) N acts from \\(x=0\\) to \\(x={d}\\). Find the work."
+            setup = f"\\[W=\\int_0^{{{d}}}({expr_latex(F)})\\,dx\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": d, "bottom": {"t": "c", "v": 0}, "top": {"t": "poly", "k": [10, 4, 1]}}
+            compute = {"expr": F, "a": 0, "b": d, "label": "W", "units": "J"}
         elif case == 6:
-            c, T = 2 + tier + rep, 3 + tier + rep
-            if tier < 2:
-                P = c * t**2
-            else:
-                P = c * t**2 + (1 + rep) * t
-            W = sp.integrate(P, (t, 0, T))
-            prompt = f"Power draw is \\(P(t)={expr_latex(P, t)}\\) watts for \\(0\\le t\\le {T}\\). Find energy used."
-            setup = f"\\[E=\\int_0^{{{T}}}{expr_latex(P, t)}\\,dt\\]"
-            vp = {"method": "area", "xMin": 0, "xMax": T, "bottom": {"t": "c", "v": 0}, "top": {"t": "poly", "k": [0, 0, c]}}
-            compute = {"expr": P, "a": 0, "b": T, "var": t, "label": "E", "units": "J"}
-        elif case == 7:
-            p, q, T = 60 + 20 * tier + 5 * rep, 3 + tier + rep, 4 + tier
-            if tier < 2:
-                Mp = p - q * x
-            else:
-                Mp = p - q * x - x**2
-            W = sp.integrate(Mp, (x, 0, T))
-            prompt = f"Marginal profit is \\(P'(x)={expr_latex(Mp)}\\) dollars/unit for \\(0\\le x\\le {T}\\). Find total profit change."
-            setup = f"\\[\\Delta P=\\int_0^{{{T}}}({expr_latex(Mp)})\\,dx\\]"
-            vp = {"method": "area", "xMin": 0, "xMax": T, "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": -q, "b": p}}
-            compute = {"expr": Mp, "a": 0, "b": T, "label": "\\Delta P"}
-        elif case == 8:
-            c, L = 2 + tier + rep, 2 + tier + rep
-            if tier < 2:
-                F = c * sp.sqrt(x)
-            else:
-                F = c * sp.sqrt(x) + (1 + rep) * x
+            c = 2 + j
+            F = c * sp.sqrt(x)
+            L = 4 + tier
             W = sp.integrate(F, (x, 0, L))
             prompt = f"A force varies as \\(F(x)={expr_latex(F)}\\) N over \\([0,{L}]\\). Find the work."
             setup = f"\\[W=\\int_0^{{{L}}}{expr_latex(F)}\\,dx\\]"
             vp = {"method": "area", "xMin": 0, "xMax": L, "bottom": {"t": "c", "v": 0}, "top": {"t": "sqrt", "a": c}}
             compute = {"expr": F, "a": 0, "b": L, "label": "W", "units": "J"}
+        elif case == 7:
+            F = (5 + j) * sp.exp(-x / 2)
+            d = 2 + tier
+            W = sp.integrate(F, (x, 0, d))
+            prompt = f"Force \\(F(x)={expr_latex(F)}\\) N acts from \\(0\\) to \\({d}\\) m. Find the work."
+            setup = f"\\[W=\\int_0^{{{d}}}{expr_latex(F)}\\,dx\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": d, "bottom": {"t": "c", "v": 0}, "top": {"t": "exp", "s": 5 + j, "a": -0.5}}
+            compute = {"expr": F, "a": 0, "b": d, "label": "W", "units": "J"}
+        elif case == 8:
+            F = (8 + j) + (2 + rep) * sp.sin(x)
+            d = sp.pi
+            W = sp.integrate(F, (x, 0, d))
+            prompt = f"Force \\(F(x)={expr_latex(F)}\\) N acts on \\([0,\\pi]\\). Find the work."
+            setup = f"\\[W=\\int_0^{{\\pi}}({expr_latex(F)})\\,dx\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": 3.1416, "bottom": {"t": "c", "v": 0}, "top": {"t": "sin", "a": 2 + rep, "b": 8 + j}}
+            compute = {"expr": F, "a": 0, "b": d, "label": "W", "units": "J"}
         elif case == 9:
-            c, T = 80 + 20 * tier + 10 * rep, 1 + tier + rep
-            if tier < 2:
-                rate = c * sp.exp(-t)
-            else:
-                rate = c * t * sp.exp(-t)
+            # piecewise force: constant then linear
+            a, b_end = 2 + tier, 4 + tier + rep
+            F1, F2 = 10 + 2 * j, 10 + 2 * j + 3 * (x - a)
+            W = sp.integrate(sp.Integer(F1), (x, 0, a)) + sp.integrate(F2, (x, a, b_end))
+            prompt = (
+                f"Force is constant \\(F={F1}\\) N on \\([0,{a}]\\) and "
+                f"\\(F(x)={expr_latex(F2)}\\) N on \\([{a},{b_end}]\\). Find the total work."
+            )
+            setup = f"\\[W=\\int_0^{{{a}}}{F1}\\,dx+\\int_{{{a}}}^{{{b_end}}}({expr_latex(F2)})\\,dx\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": b_end, "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": 3, "b": F1 - 3 * a}}
+            p1 = full_definite_eval_steps(sp.Integer(F1), 0, a, x, label="W_1")
+            p2 = full_definite_eval_steps(F2, a, b_end, x, label="W_2")
+            out.append({
+                "source": source, "title": "Applications", "prompt": prompt,
+                "choices": mc_choices(f"W = {nice_latex(sp.simplify(W))}", f"2W", f"W/2", f"{F1 * b_end}"),
+                "steps": [
+                    step("Strategy: split where the force law changes", "Write one integral per piece, evaluate each, then add."),
+                ] + p1 + p2 + [
+                    step("Total work", f"\\[W=W_1+W_2={nice_latex(sp.simplify(W))}\\text{{ J}}\\]"),
+                ],
+                "finalAnswer": f"W = {nice_latex(sp.simplify(W))}\\text{{ J}}",
+                "insight": units_insight, "visual": "area", "difficulty": diff, "visualParams": vp,
+                "equations": equations_kit("work", setup),
+            })
+            continue
+
+        # --- Pumping tanks (10–17) ---
+        elif case == 10:
+            width, depth = 2 + j, 2 + tier
+            W = sp.Rational(9800 * width * depth**2, 2)
+            prompt = (
+                f"A rectangular tank is \\({width}\\) m wide and filled to depth \\({depth}\\) m. "
+                f"Pump all water to the top edge (\\(\\rho g=9800\\)). Find the work."
+            )
+            setup = f"\\[W=9800\\int_0^{{{depth}}}{width}({depth}-y)\\,dy\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": depth, "bottom": {"t": "c", "v": 0}, "top": {"t": "c", "v": width}}
+            compute = {
+                "expr": width * (depth - y), "a": 0, "b": depth, "var": y, "label": "W", "scale": 9800, "units": "J",
+                "parts": {"A": str(width), "lift": f"{depth}-y", "rhog": "9800", "var": "y"},
+                "display_integrand": f"{width}({depth}-y)",
+            }
+        elif case == 11:
+            width, depth, spout = 3 + j, 2 + tier, 1 + rep
+            W = 9800 * sp.integrate(width * (depth + spout - y), (y, 0, depth))
+            prompt = (
+                f"Rectangular tank width \\({width}\\) m, filled to \\({depth}\\) m. "
+                f"Pump to a spout \\({spout}\\) m above the top (\\(\\rho g=9800\\)). Find the work."
+            )
+            setup = f"\\[W=9800\\int_0^{{{depth}}}{width}({depth}+{spout}-y)\\,dy\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": depth, "bottom": {"t": "c", "v": 0}, "top": {"t": "c", "v": width}}
+            compute = {
+                "expr": width * (depth + spout - y), "a": 0, "b": depth, "var": y,
+                "label": "W", "scale": 9800, "units": "J",
+                "display_integrand": f"{width}({depth}+{spout}-y)",
+            }
+        elif case == 12:
+            # cylindrical tank radius R, depth H — horizontal slabs
+            R, H = 1 + tier + rep, 2 + tier
+            A = sp.pi * R**2
+            W = 9800 * sp.integrate(A * (H - y), (y, 0, H))
+            prompt = (
+                f"A vertical cylindrical tank has radius \\({R}\\) m and is filled to depth \\({H}\\) m. "
+                f"Pump all water to the top (\\(\\rho g=9800\\)). Find the work."
+            )
+            setup = f"\\[W=9800\\int_0^{{{H}}}\\pi({R})^2({H}-y)\\,dy\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": H, "bottom": {"t": "c", "v": 0}, "top": {"t": "c", "v": float(sp.pi * R**2)}}
+            compute = {
+                "expr": A * (H - y), "a": 0, "b": H, "var": y, "label": "W", "scale": 9800, "units": "J",
+                "display_integrand": f"\\pi({R})^{{2}}({H}-y)",
+            }
+        elif case == 13:
+            # triangular trough cross-section: width grows with depth
+            top_w, H = 2 + j, 3 + tier
+            # at height y from bottom, width = (top_w/H)*y, length L=4
+            L = 4 + rep
+            W = 9800 * sp.integrate(L * (top_w / H) * y * (H - y), (y, 0, H))
+            prompt = (
+                f"A trough of length \\({L}\\) m has equilateral-triangle ends of height \\({H}\\) m and top width \\({top_w}\\) m, "
+                f"filled with water. Pump to the top (\\(\\rho g=9800\\)). Find the work."
+            )
+            setup = (
+                f"At height \\(y\\) from the bottom, slab width is \\(\\frac{{{top_w}}}{{{H}}}y\\): "
+                f"\\[W=9800\\int_0^{{{H}}}{L}\\cdot\\frac{{{top_w}}}{{{H}}}y\\cdot({H}-y)\\,dy\\]"
+            )
+            vp = {"method": "area", "xMin": 0, "xMax": H, "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": top_w / H}}
+            compute = {
+                "expr": L * (top_w / H) * y * (H - y), "a": 0, "b": H, "var": y,
+                "label": "W", "scale": 9800, "units": "J",
+            }
+        elif case == 14:
+            # pump only half the tank
+            width, depth = 2 + j, 4 + tier
+            half = depth // 2
+            W = 9800 * sp.integrate(width * (depth - y), (y, half, depth))
+            prompt = (
+                f"A rectangular tank is \\({width}\\) m wide and filled to \\({depth}\\) m. "
+                f"Pump only the top half of the water to the top edge (\\(\\rho g=9800\\)). Find the work."
+            )
+            setup = f"Water from \\(y={half}\\) to \\(y={depth}\\): \\[W=9800\\int_{{{half}}}^{{{depth}}}{width}({depth}-y)\\,dy\\]"
+            vp = {"method": "area", "xMin": half, "xMax": depth, "bottom": {"t": "c", "v": 0}, "top": {"t": "c", "v": width}}
+            compute = {
+                "expr": width * (depth - y), "a": half, "b": depth, "var": y,
+                "label": "W", "scale": 9800, "units": "J",
+            }
+        elif case == 15:
+            # measure y from the top: lift = y
+            width, depth = 3 + j, 2 + tier
+            W = 9800 * sp.integrate(width * y, (y, 0, depth))
+            prompt = (
+                f"A rectangular tank is \\({width}\\) m wide and filled to depth \\({depth}\\) m. "
+                f"With \\(y\\) measured down from the top, set up and evaluate the work to empty the tank (\\(\\rho g=9800\\))."
+            )
+            setup = f"Lift distance equals \\(y\\): \\[W=9800\\int_0^{{{depth}}}{width}\\,y\\,dy\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": depth, "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": width}}
+            compute = {
+                "expr": width * y, "a": 0, "b": depth, "var": y, "label": "W", "scale": 9800, "units": "J",
+                "display_integrand": f"{width}y",
+            }
+        elif case == 16:
+            # hemispherical bowl radius R, pump to rim
+            R = 2 + tier
+            # horizontal radius at height y from bottom: √(R^2 - (R-y)^2) for lower hemisphere...
+            # simpler: inverted cone-like known form — use cylindrical radius √(2Ry - y^2)
+            # From bottom y=0 to y=R, radius of slice = √(2 R y - y^2)
+            W = 9800 * sp.integrate(sp.pi * (2 * R * y - y**2) * (R - y), (y, 0, R))
+            prompt = (
+                f"A hemispherical bowl of radius \\({R}\\) m is full of water. "
+                f"Pump all water to the rim (\\(\\rho g=9800\\)). Find the work."
+            )
+            setup = (
+                f"At height \\(y\\) from the bottom, slice radius satisfies \\(r^2=2{R}y-y^2\\): "
+                f"\\[W=9800\\int_0^{{{R}}}\\pi(2\\cdot{R}y-y^2)({R}-y)\\,dy\\]"
+            )
+            vp = {"method": "area", "xMin": 0, "xMax": R, "bottom": {"t": "c", "v": 0}, "top": {"t": "circle-upper", "R": R, "cx": 0, "cy": 0}}
+            compute = {
+                "expr": sp.pi * (2 * R * y - y**2) * (R - y), "a": 0, "b": R, "var": y,
+                "label": "W", "scale": 9800, "units": "J",
+            }
+        elif case == 17:
+            # leak while pumping: not needed — variable density or partial depth fill
+            width, fill, tank_h = 2 + j, 2 + tier, 4 + tier
+            W = 9800 * sp.integrate(width * (tank_h - y), (y, 0, fill))
+            prompt = (
+                f"A tank is \\({width}\\) m wide and \\({tank_h}\\) m tall but only filled to \\({fill}\\) m. "
+                f"Pump the water over the top of the tank (\\(\\rho g=9800\\)). Find the work."
+            )
+            setup = f"\\[W=9800\\int_0^{{{fill}}}{width}({tank_h}-y)\\,dy\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": fill, "bottom": {"t": "c", "v": 0}, "top": {"t": "c", "v": width}}
+            compute = {
+                "expr": width * (tank_h - y), "a": 0, "b": fill, "var": y,
+                "label": "W", "scale": 9800, "units": "J",
+            }
+
+        # --- Rope / chain / cable (18–22) ---
+        elif case == 18:
+            L, rho = 8 + 2 * j, 2 + tier
+            W = sp.integrate(rho * y, (y, 0, L))
+            prompt = f"A rope of length \\({L}\\) m weighs \\({rho}\\) N/m. Find the work to lift the entire rope to the top."
+            setup = f"\\[W=\\int_0^{{{L}}}{rho}y\\,dy\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": L, "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": rho}}
+            compute = {"expr": rho * y, "a": 0, "b": L, "var": y, "label": "W", "units": "J", "display_integrand": f"{rho}y"}
+        elif case == 19:
+            L, rho = 10 + 2 * j, 3 + tier
+            half = L // 2
+            W = sp.integrate(rho * y, (y, 0, half))
+            prompt = (
+                f"A rope of length \\({L}\\) m and density \\({rho}\\) N/m hangs from a building. "
+                f"Find the work to pull up only the first \\({half}\\) m of rope."
+            )
+            setup = f"\\[W=\\int_0^{{{half}}}{rho}y\\,dy\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": half, "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": rho}}
+            compute = {"expr": rho * y, "a": 0, "b": half, "var": y, "label": "W", "units": "J"}
+        elif case == 20:
+            L, rho, M = 12 + 2 * j, 2 + tier, 50 + 10 * j
+            # chain with end mass M lifted full length: rope work + constant M*L
+            W_rope = sp.integrate(rho * y, (y, 0, L))
+            W = W_rope + M * L
+            prompt = (
+                f"A chain of length \\({L}\\) m weighs \\({rho}\\) N/m and has a \\({M}\\) N weight at the end. "
+                f"Find the work to lift chain and weight to the top."
+            )
+            setup = f"\\[W=\\int_0^{{{L}}}{rho}y\\,dy+{M}\\cdot{L}\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": L, "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": rho, "b": M}}
+            steps = full_definite_eval_steps(rho * y, 0, L, y, label="W_{{\\text{chain}}}") + [
+                step("Weight contribution", f"Constant force \\({M}\\) N through \\({L}\\) m: \\[W_{{\\text{{weight}}}}={M}\\cdot{L}={M * L}\\]"),
+                step("Total", f"\\[W=W_{{\\text{{chain}}}}+W_{{\\text{{weight}}}}={nice_latex(sp.simplify(W))}\\text{{ J}}\\]"),
+            ]
+            out.append({
+                "source": source, "title": "Applications", "prompt": prompt,
+                "choices": mc_choices(f"W = {nice_latex(sp.simplify(W))}", f"2W", f"{M * L}", f"{nice_latex(W_rope)}"),
+                "steps": [
+                    step("Strategy: chain + payload", "Integrate the hanging chain, then add work on the end weight."),
+                ] + steps,
+                "finalAnswer": f"W = {nice_latex(sp.simplify(W))}\\text{{ J}}",
+                "insight": units_insight, "visual": "area", "difficulty": diff, "visualParams": vp,
+                "equations": equations_kit("work", setup),
+            })
+            continue
+        elif case == 21:
+            # building height H, rope longer than building — only H of rope lifted off ground
+            H, rho = 6 + j, 4 + tier
+            W = sp.integrate(rho * y, (y, 0, H))
+            prompt = (
+                f"A heavy cable weighs \\({rho}\\) N/m. It takes \\({H}\\) m of cable to reach the ground from a roof. "
+                f"Find the work to pull the free end up to the roof (start with free end on the ground)."
+            )
+            setup = f"\\[W=\\int_0^{{{H}}}{rho}y\\,dy\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": H, "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": rho}}
+            compute = {"expr": rho * y, "a": 0, "b": H, "var": y, "label": "W", "units": "J"}
+        elif case == 22:
+            L, rho = 5 + j, 6 + 2 * tier
+            # lift from table: half hanging initially
+            hang = L // 2 if L >= 2 else 1
+            W = sp.integrate(rho * y, (y, 0, hang))
+            prompt = (
+                f"A chain of length \\({L}\\) m and density \\({rho}\\) N/m has half its length hanging off a table. "
+                f"Find the work to pull the hanging part onto the table."
+            )
+            setup = f"\\[W=\\int_0^{{{hang}}}{rho}y\\,dy\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": hang, "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": rho}}
+            compute = {"expr": rho * y, "a": 0, "b": hang, "var": y, "label": "W", "units": "J"}
+
+        # --- Kinematics / accumulation (23–31) ---
+        elif case == 23:
+            v = (4 + rep) + (2 + j) * t
+            T = 3 + tier
+            W = sp.integrate(v, (t, 0, T))
+            label = "s"
+            prompt = f"Velocity is \\(v(t)={expr_latex(v, t)}\\) m/s for \\(0\\le t\\le {T}\\). Find distance traveled."
+            setup = f"\\[s=\\int_0^{{{T}}}({expr_latex(v, t)})\\,dt\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": T, "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": 2 + j, "b": 4 + rep}}
+            compute = {"expr": v, "a": 0, "b": T, "var": t, "label": "s", "units": "m"}
+        elif case == 24:
+            v = (1 + j) * t + t**2
+            T = 2 + tier
+            W = sp.integrate(v, (t, 0, T))
+            label = "s"
+            prompt = f"Velocity \\(v(t)={expr_latex(v, t)}\\) m/s on \\([0,{T}]\\). Find the distance traveled."
+            setup = f"\\[s=\\int_0^{{{T}}}({expr_latex(v, t)})\\,dt\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": T, "bottom": {"t": "c", "v": 0}, "top": {"t": "poly", "k": [0, 1 + j, 1]}}
+            compute = {"expr": v, "a": 0, "b": T, "var": t, "label": "s", "units": "m"}
+        elif case == 25:
+            v = (2 + j) * sp.sin(t) + 3
+            T = sp.pi
+            W = sp.integrate(v, (t, 0, T))
+            label = "s"
+            prompt = f"Velocity \\(v(t)={expr_latex(v, t)}\\) m/s on \\([0,\\pi]\\). Find the distance traveled."
+            setup = f"\\[s=\\int_0^{{\\pi}}({expr_latex(v, t)})\\,dt\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": 3.1416, "bottom": {"t": "c", "v": 0}, "top": {"t": "sin", "a": 2 + j, "b": 3}}
+            compute = {"expr": v, "a": 0, "b": T, "var": t, "label": "s", "units": "m"}
+        elif case == 26:
+            rate, T = 4 + 2 * j, 4 + 2 * tier
+            f = rate * (1 + t / T)
+            W = sp.integrate(f, (t, 0, T))
+            label = "Q"
+            prompt = f"Flow rate is \\({expr_latex(f, t)}\\) L/min for \\(0\\le t\\le {T}\\). Find total volume delivered."
+            setup = f"\\[Q=\\int_0^{{{T}}}{expr_latex(f, t)}\\,dt\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": T, "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": rate / T, "b": rate}}
+            compute = {"expr": f, "a": 0, "b": T, "var": t, "label": "Q"}
+        elif case == 27:
+            rate, T = 5 + j, 3 + tier
+            f = rate * sp.exp(-t / T)
+            W = sp.integrate(f, (t, 0, T))
+            label = "Q"
+            prompt = f"Flow rate \\({expr_latex(f, t)}\\) L/min on \\([0,{T}]\\). Find total volume."
+            setup = f"\\[Q=\\int_0^{{{T}}}{expr_latex(f, t)}\\,dt\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": T, "bottom": {"t": "c", "v": 0}, "top": {"t": "exp", "s": rate, "a": -1 / T}}
+            compute = {"expr": f, "a": 0, "b": T, "var": t, "label": "Q"}
+        elif case == 28:
+            c, T = 2 + j, 3 + tier + rep
+            P = c * t**2
+            W = sp.integrate(P, (t, 0, T))
+            label = "E"
+            prompt = f"Power draw is \\(P(t)={expr_latex(P, t)}\\) watts for \\(0\\le t\\le {T}\\). Find energy used."
+            setup = f"\\[E=\\int_0^{{{T}}}{expr_latex(P, t)}\\,dt\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": T, "bottom": {"t": "c", "v": 0}, "top": {"t": "poly", "k": [0, 0, c]}}
+            compute = {"expr": P, "a": 0, "b": T, "var": t, "label": "E", "units": "J"}
+        elif case == 29:
+            c, T = 3 + j, 2 + tier
+            P = c * t**2 + (1 + rep) * t
+            W = sp.integrate(P, (t, 0, T))
+            label = "E"
+            prompt = f"Power \\(P(t)={expr_latex(P, t)}\\) W on \\([0,{T}]\\). Find energy used."
+            setup = f"\\[E=\\int_0^{{{T}}}{expr_latex(P, t)}\\,dt\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": T, "bottom": {"t": "c", "v": 0}, "top": {"t": "poly", "k": [0, 1 + rep, c]}}
+            compute = {"expr": P, "a": 0, "b": T, "var": t, "label": "E", "units": "J"}
+        elif case == 30:
+            p, q, T = 60 + 20 * j, 3 + tier, 4 + tier
+            Mp = p - q * x
+            W = sp.integrate(Mp, (x, 0, T))
+            label = "\\Delta P"
+            prompt = f"Marginal profit is \\(P'(x)={expr_latex(Mp)}\\) dollars/unit for \\(0\\le x\\le {T}\\). Find total profit change."
+            setup = f"\\[\\Delta P=\\int_0^{{{T}}}({expr_latex(Mp)})\\,dx\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": T, "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": -q, "b": p}}
+            compute = {"expr": Mp, "a": 0, "b": T, "label": "\\Delta P"}
+        elif case == 31:
+            c, T = 80 + 20 * j, 1 + tier + rep
+            rate = c * sp.exp(-t)
             W = sp.integrate(rate, (t, 0, T))
+            label = "A"
             prompt = f"A drug concentration rate is \\({expr_latex(rate, t)}\\) units/hour on \\([0,{T}]\\). Find accumulated amount."
             setup = f"\\[A=\\int_0^{{{T}}}{expr_latex(rate, t)}\\,dt\\]"
             vp = {"method": "area", "xMin": 0, "xMax": T, "bottom": {"t": "c", "v": 0}, "top": {"t": "exp", "s": c, "a": -1}}
             compute = {"expr": rate, "a": 0, "b": T, "var": t, "label": "A"}
-        elif case == 10:
-            length, width, path = 16 + 4 * tier + 2 * rep, 10 + 2 * tier + rep, 1 + tier
+
+        # --- Geometry / mixed applications (32–35) ---
+        elif case == 32:
+            length, width, path = 16 + 4 * j, 10 + 2 * j, 1 + tier
             W = length * width - (length - 2 * path) * (width - 2 * path)
+            label = "A"
             prompt = (
                 f"A rectangular lot is \\({length}\\) m by \\({width}\\) m. A uniform walkway "
                 f"\\({path}\\) m wide runs inside all four sides. Find the walkway area."
@@ -3423,24 +4192,23 @@ def catalog_applications_varied():
                 step("Outer area", f"\\[A_{{\\text{{outer}}}}={length}\\cdot{width}={length * width}\\]"),
                 step(
                     "Inner dimensions",
-                    f"Each side loses \\(2\\cdot{path}={2 * path}\\) m total, so inner size is "
-                    f"\\(({length}-2\\cdot{path})\\times({width}-2\\cdot{path})=({length - 2 * path})\\times({width - 2 * path})\\).",
+                    f"Inner size is \\(({length}-2\\cdot{path})\\times({width}-2\\cdot{path})"
+                    f"=({length - 2 * path})\\times({width - 2 * path})\\).",
                 ),
-                step("Inner area", f"\\[A_{{\\text{{inner}}}}={length - 2 * path}\\cdot{width - 2 * path}={(length - 2 * path) * (width - 2 * path)}\\]"),
                 step("Subtract", f"\\[A_{{\\text{{walk}}}}={length * width}-{(length - 2 * path) * (width - 2 * path)}={W}\\]"),
             ]
             out.append({
                 "source": source, "title": "Applications", "prompt": prompt,
                 "choices": mc_choices(f"A = {W}", f"2({W})", f"{W}/2", f"{length * width}"),
                 "steps": steps, "finalAnswer": f"A = {W}",
-                "insight": "Word problems: decide what accumulates. Geometry difference problems expand fully before subtracting.",
-                "visual": "area", "difficulty": diff, "visualParams": vp,
+                "insight": units_insight, "visual": "area", "difficulty": diff, "visualParams": vp,
                 "equations": [r"A_{\text{walk}}=A_{\text{outer}}-A_{\text{inner}}"],
             })
             continue
-        else:
-            base1, base2, height = 12 + 4 * tier + 2 * rep, 8 + 2 * tier + rep, 5 + tier + rep
+        elif case == 33:
+            base1, base2, height = 12 + 4 * j, 8 + 2 * j, 5 + tier + rep
             W = sp.Rational(base1 + base2, 2) * height
+            label = "A"
             prompt = (
                 f"A trapezoidal land lot has parallel sides \\({base1}\\) m and \\({base2}\\) m "
                 f"with distance \\({height}\\) m between them. Find its area."
@@ -3451,24 +4219,189 @@ def catalog_applications_varied():
                 "top": {"t": "lin", "a": (base2 - base1) / height, "b": base1},
             }
             steps = [
-                step("Strategy: trapezoid area formula", "Average the two parallel sides, then multiply by the distance between them."),
-                step("Write the formula", f"\\[A=\\frac{{1}}{{2}}(b_1+b_2)h=\\frac{{1}}{{2}}({base1}+{base2})({height})\\]"),
-                step("Add the bases", f"\\[{base1}+{base2}={base1 + base2}\\]"),
-                step("Multiply and simplify", f"\\[A=\\frac{{1}}{{2}}\\cdot{base1 + base2}\\cdot{height}={nice_latex(W)}\\]"),
+                step("Strategy: trapezoid area formula", "Average the two parallel sides, then multiply by the height."),
+                step("Write the formula", f"\\[A=\\frac{{1}}{{2}}({base1}+{base2})({height})\\]"),
+                step("Simplify", f"\\[A={nice_latex(W)}\\]"),
             ]
             out.append({
                 "source": source, "title": "Applications", "prompt": prompt,
                 "choices": mc_choices(f"A = {nice_latex(W)}", f"2({nice_latex(W)})", f"{base1 * height}", f"{base2 * height}"),
                 "steps": steps, "finalAnswer": f"A = {nice_latex(W)}",
-                "insight": "Word problems: decide what accumulates. Closed-form geometry formulas still need every arithmetic step shown.",
-                "visual": "area", "difficulty": diff, "visualParams": vp,
+                "insight": units_insight, "visual": "area", "difficulty": diff, "visualParams": vp,
                 "equations": [r"A=\frac{1}{2}(b_1+b_2)h"],
             })
             continue
-        label = "W" if case in {0, 1, 2, 3, 8} else ("s" if case == 4 else ("Q" if case == 5 else ("E" if case == 6 else ("\\Delta P" if case == 7 else "A"))))
+        elif case == 34:
+            c, T = 50 + 10 * j, 2 + tier
+            rate = c * t * sp.exp(-t)
+            W = sp.integrate(rate, (t, 0, T))
+            label = "A"
+            prompt = f"Infusion rate \\({expr_latex(rate, t)}\\) units/h on \\([0,{T}]\\). Find total accumulated amount."
+            setup = f"\\[A=\\int_0^{{{T}}}{expr_latex(rate, t)}\\,dt\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": T, "bottom": {"t": "c", "v": 0}, "top": {"t": "exp", "s": c, "a": -1}}
+            compute = {"expr": rate, "a": 0, "b": T, "var": t, "label": "A"}
+        elif case == 35:
+            # net change of a quantity from rate r(t)
+            r = (6 + j) - (1 + rep) * t
+            T = 4 + tier
+            W = sp.integrate(r, (t, 0, T))
+            label = "\\Delta Q"
+            prompt = f"A quantity changes at rate \\(r(t)={expr_latex(r, t)}\\) on \\([0,{T}]\\). Find the net change."
+            setup = f"\\[\\Delta Q=\\int_0^{{{T}}}({expr_latex(r, t)})\\,dt\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": T, "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": -(1 + rep), "b": 6 + j}}
+            compute = {"expr": r, "a": 0, "b": T, "var": t, "label": "\\Delta Q"}
+
+        # --- Extra work variants (36–39) ---
+        elif case == 36:
+            F = (12 + j) / (x + 1)
+            d = 3 + tier
+            W = sp.integrate(F, (x, 0, d))
+            prompt = f"Force \\(F(x)={expr_latex(F)}\\) N acts from \\(x=0\\) to \\(x={d}\\). Find the work."
+            setup = f"\\[W=\\int_0^{{{d}}}{expr_latex(F)}\\,dx\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": d, "bottom": {"t": "c", "v": 0}, "top": {"t": "recip", "a": 12 + j}}
+            compute = {"expr": F, "a": 0, "b": d, "label": "W", "units": "J"}
+        elif case == 37:
+            # leaky sandbag: mass decreases linearly while lifted height H
+            m0, H = 20 + 5 * j, 5 + tier
+            # weight = (m0 g)(1 - y/H) if all sand gone at top; use g=9.8 ≈ 10 for clean numbers
+            g = 10
+            W = sp.integrate(m0 * g * (1 - y / H), (y, 0, H))
+            prompt = (
+                f"A bag starts at weight \\({m0 * g}\\) N and leaks sand uniformly so it is empty after rising "
+                f"\\({H}\\) m. Find the work to lift it that height."
+            )
+            setup = f"\\[W=\\int_0^{{{H}}}{m0 * g}\\left(1-\\frac{{y}}{{{H}}}\\right)\\,dy\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": H, "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": -m0 * g / H, "b": m0 * g}}
+            compute = {
+                "expr": m0 * g * (1 - y / H), "a": 0, "b": H, "var": y, "label": "W", "units": "J",
+            }
+        elif case == 38:
+            # work against gravity for rocket-ish: F = c/(x+R)^2 style but keep elementary
+            c, lo, hi = 100 + 20 * j, 1, 2 + tier
+            F = c / x**2
+            W = sp.integrate(F, (x, lo, hi))
+            prompt = (
+                f"A force \\(F(x)=\\dfrac{{{c}}}{{x^2}}\\) N acts from \\(x={lo}\\) to \\(x={hi}\\). Find the work."
+            )
+            setup = f"\\[W=\\int_{{{lo}}}^{{{hi}}}\\frac{{{c}}}{{x^2}}\\,dx\\]"
+            vp = {"method": "area", "xMin": lo, "xMax": hi, "bottom": {"t": "c", "v": 0}, "top": {"t": "recip", "a": c}}
+            compute = {"expr": F, "a": lo, "b": hi, "label": "W", "units": "J"}
+        elif case == 39:
+            # constant force then variable: work of F = kx + F0 (preload)
+            k, F0, d = 30 + 10 * j, 20 + 5 * tier, sp.Rational(1, 2) + sp.Rational(rep, 4)
+            F = F0 + k * x
+            W = sp.integrate(F, (x, 0, d))
+            prompt = (
+                f"A loaded spring has restoring force \\(F(x)={F0}+{k}x\\) N. "
+                f"Find the work to stretch it \\({sp.latex(d)}\\) m from the loaded equilibrium."
+            )
+            setup = f"\\[W=\\int_0^{{{sp.latex(d)}}}({F0}+{k}x)\\,dx\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": float(d), "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": k, "b": F0}}
+            compute = {"expr": F, "a": 0, "b": d, "label": "W", "units": "J"}
+        # --- Modeling and decision applications (40–47) ---
+        elif case == 40:
+            # Hydrostatic force on a dam with a nonconstant width.
+            H = 6 + tier
+            width = 2 + y / 2
+            pressure = 9800 * (H - y)
+            F = sp.integrate(pressure * width, (y, 0, H))
+            W = F
+            label = "F"
+            prompt = (
+                f"A dam is {H} m high. At height y above the bottom its width is "
+                f"\(w(y)=2+\\frac{{y}}{{2}}\) m. Water reaches the top. Using \(\\rho g=9800\), "
+                "find the total hydrostatic force on the dam."
+            )
+            setup = f"\\[F=9800\\int_0^{{{H}}}(2+\\frac{{y}}{{2}})({H}-y)\\,dy\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": H, "bottom": {"t": "c", "v": 0}, "top": {"t": "poly", "k": [2 * H * 9800, (H / 2 - 2) * 9800, -9800 / 2]}}
+            compute = {"expr": pressure * width, "a": 0, "b": H, "var": y, "label": "F", "units": "N"}
+        elif case == 41:
+            # Variable-density rod: mass is an accumulation, not a force/work problem.
+            L = 4 + tier
+            density = 2 + x
+            mass = sp.integrate(density, (x, 0, L))
+            W = mass
+            label = "M"
+            prompt = f"A {L} m rod has linear density \(\\rho(x)=2+x\) kg/m. Find its mass."
+            setup = f"\\[M=\\int_0^{{{L}}}(2+x)\\,dx\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": L, "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": 1, "b": 2}}
+            compute = {"expr": density, "a": 0, "b": L, "label": "M", "units": "kg"}
+        elif case == 42:
+            # Average value: the integral must be divided by the time interval.
+            T = 12
+            temp = 20 + (4 + tier) * sp.cos(sp.pi * t / T)
+            avg = sp.simplify(sp.integrate(temp, (t, 0, T)) / T)
+            W = avg
+            label = "T_{\\mathrm{avg}}"
+            prompt = f"A sensor records temperature \(T(t)=20+{4 + tier}\\cos(\\frac{{\\pi t}}{{12}})\) °C for \(0\\le t\\le12\). Find the average temperature."
+            setup = f"\\[T_{{\\mathrm{{avg}}}}=\\frac{{1}}{{12}}\\int_0^{{12}}T(t)\\,dt\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": T, "bottom": {"t": "c", "v": 0}, "top": {"t": "cos", "a": 4 + tier, "w": sp.pi / T, "b": 20}}
+            compute = {"expr": temp / T, "a": 0, "b": T, "var": t, "label": label, "units": "°C"}
+        elif case == 43:
+            # Population rate with a changing sign: net change is not total change.
+            T = 8
+            rate = 6 - 1.5 * t
+            change = sp.integrate(rate, (t, 0, T))
+            W = change
+            label = "\\Delta P"
+            prompt = f"A population changes at rate \(P'(t)=6-1.5t\) people/month for \(0\\le t\\le{T}\). Find the net change in population."
+            setup = f"\\[\\Delta P=\\int_0^{{{T}}}(6-1.5t)\\,dt\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": T, "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": -1.5, "b": 6}}
+            compute = {"expr": rate, "a": 0, "b": T, "var": t, "label": label, "units": "people"}
+        elif case == 44:
+            # A finite-horizon decay model asks for accumulated exposure, not
+            # the instantaneous rate at the endpoint.
+            T = 3 + tier
+            rate = (12 + 2 * tier) * sp.exp(-t / 2)
+            total = sp.integrate(rate, (t, 0, T))
+            W = total
+            label = "Q"
+            prompt = f"A sensor receives signal at rate \(r(t)={expr_latex(rate, t)}\) units/h for \(0\\le t\\le{T}\). Find the total signal received."
+            setup = f"\\[Q=\\int_0^{{{T}}}{expr_latex(rate, t)}\\,dt\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": T, "bottom": {"t": "c", "v": 0}, "top": {"t": "exp", "s": 12 + 2 * tier, "a": -0.5}}
+            compute = {"expr": rate, "a": 0, "b": T, "var": t, "label": label, "units": "units"}
+        elif case == 45:
+            # Marginal revenue versus marginal cost: the meaningful integrand
+            # is the difference, and it changes sign at the break-even output.
+            T = 10
+            net_rate = 24 - 3 * x
+            change = sp.integrate(net_rate, (x, 0, T))
+            W = change
+            label = "\\Delta P"
+            prompt = (
+                "A firm's marginal revenue is \(R'(x)=30-2x\) dollars/unit and marginal cost is "
+                "\(C'(x)=6+x\). Assuming profit change is zero at x=0, find the net profit change after 10 units."
+            )
+            setup = "\\[\\Delta P=\\int_0^{10}(R'(x)-C'(x))\\,dx=\\int_0^{10}(24-3x)\\,dx\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": T, "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": -3, "b": 24}}
+            compute = {"expr": net_rate, "a": 0, "b": T, "label": label, "units": "dollars"}
+        elif case == 46:
+            # Lorenz curve / Gini index from the reference's inequality model.
+            lorenz = x**2
+            gini = sp.simplify(1 - 2 * sp.integrate(lorenz, (x, 0, 1)))
+            W = gini
+            label = "G"
+            prompt = "A population has Lorenz curve \(L(x)=x^2\). Find its Gini index \(G=1-2\\int_0^1L(x)\\,dx\)."
+            setup = "\\[G=1-2\\int_0^1x^2\\,dx\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": 1, "bottom": {"t": "c", "v": 0}, "top": {"t": "poly", "k": [0, 0, 1]}}
+            compute = {"expr": 1 - 2 * lorenz, "a": 0, "b": 1, "label": label}
+        else:
+            # Center of mass of a variable-density rod.
+            L = 4 + tier
+            density = 2 + x
+            mass = sp.integrate(density, (x, 0, L))
+            center = sp.simplify(sp.integrate(x * density, (x, 0, L)) / mass)
+            W = center
+            visual_kind = "centroid"
+            label = "\\bar{x}"
+            prompt = f"A {L} m rod has density \(\\rho(x)=2+x\) kg/m. Find its center of mass measured from the left end."
+            setup = f"\\[\\bar x=\\frac{{\\int_0^{{{L}}}x(2+x)\\,dx}}{{\\int_0^{{{L}}}(2+x)\\,dx}}\\]"
+            vp = {"method": "centroid", "xMin": 0, "xMax": L, "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": 1, "b": 2}, "marker": {"x": float(center), "y": 1}}
+            compute = {"expr": x * density / mass, "a": 0, "b": L, "label": label, "units": "m"}
+
         out.append(custom_problem(
-            source, "Applications", prompt, f"{label} = {sp.latex(sp.simplify(W))}", setup, "area", diff, vp,
-            "Word problems: decide what accumulates (work, distance, volume, energy). If the rate or lift distance changes, write a thin-slice integral and add them up.",
+            source, "Applications", prompt, f"{label} = {sp.latex(sp.simplify(W))}", setup, visual_kind, diff, vp,
+            units_insight,
             compute=compute,
         ))
     return out
@@ -3531,10 +4464,11 @@ def catalog_centroids_varied():
 
 
 def catalog_arc_varied():
-    """10 distinct arc-length concepts (not 4 slope clones); 20/20/10 difficulty."""
+    """12 arc-length concepts, including curves described as x=g(y)."""
     out = []
+    N_ARC = 12
     for i in range(PER_TOPIC):
-        case = i % 10
+        case = i % N_ARC
         diff = difficulty_for_index(i)
         tier = difficulty_tier(diff)
         rep = (i // 10) % 2
@@ -3708,6 +4642,49 @@ def catalog_arc_varied():
                 "equations": equations_kit("arc", setup),
             })
             continue
+        elif case == 10:
+            # Horizontal-strip arc length, x = g(y), as in the inverse-form
+            # arc-length exercises in Briggs §6.5.
+            hi = 3 + tier
+            g = sp.Rational(2, 3) * y ** sp.Rational(3, 2)
+            integrand = sp.sqrt(1 + y)
+            L = sp.simplify(sp.integrate(integrand, (y, 0, hi)))
+            prompt = f"Use horizontal strips to find the arc length of \\(x=\\frac{{2}}{{3}}y^{{3/2}}\\) on \\([0,{hi}]\\)."
+            setup = f"\\[L=\\int_0^{{{hi}}}\\sqrt{{1+\\left(\\frac{{dx}}{{dy}}\\right)^2}}\\,dy=\\int_0^{{{hi}}}\\sqrt{{1+y}}\\,dy\\]"
+            vp = {
+                "method": "arc", "orientation": "horizontal", "yMin": 0, "yMax": hi,
+                "left": {"t": "pow", "a": 2 / 3, "n": 1.5},
+                "right": {"t": "pow", "a": 2 / 3, "n": 1.5},
+                "sampleLabel": "sample y", "measureLabel": "segment length",
+            }
+            compute = {"f": g, "expr": integrand, "a": 0, "b": hi, "var": y, "label": "L", "value": L}
+            out.append(custom_problem(
+                source, "Arc length", prompt, f"L = {sp.latex(L)}", setup, "curve", diff, vp,
+                "For a horizontal description x=g(y), use ds=\\sqrt{1+(dx/dy)^2}\\,dy. The strip direction determines the variable.",
+                compute=compute,
+            ))
+            continue
+        elif case == 11:
+            # A line described horizontally: a geometry check and a genuine
+            # dy problem rather than another y=f(x) slope clone.
+            y0, y1 = -3, 4
+            slope = 2 + tier
+            L = (y1 - y0) * sp.sqrt(1 + slope**2)
+            prompt = f"Use horizontal strips to find the arc length of \\(x={slope}y-4\\) from \\(y={y0}\\) to \\(y={y1}\\)."
+            setup = f"\\[L=\\int_{{{y0}}}^{{{y1}}}\\sqrt{{1+{slope}^2}}\\,dy\\]"
+            line = {"t": "lin", "a": slope, "b": -4}
+            vp = {
+                "method": "arc", "orientation": "horizontal", "yMin": y0, "yMax": y1,
+                "left": line, "right": line,
+                "sampleLabel": "sample y", "measureLabel": "segment length",
+            }
+            compute = {"f": slope * y - 4, "expr": sp.sqrt(1 + slope**2), "a": y0, "b": y1, "var": y, "label": "L", "value": L}
+            out.append(custom_problem(
+                source, "Arc length", prompt, f"L = {sp.latex(L)}", setup, "curve", diff, vp,
+                "The horizontal form is the same hypotenuse idea: dx=(dx/dy)dy, so integrate with respect to y.",
+                compute=compute,
+            ))
+            continue
         else:
             # y = √x
             n = 1 + tier + rep
@@ -3731,16 +4708,22 @@ def catalog_arc_varied():
 
 
 def catalog_surface_varied():
-    """10 distinct surface-of-revolution concepts (not 5 slope clones); 20/20/10 difficulty."""
+    """12 surface-of-revolution concepts incl. about y-axis and x=g(y); 20/20/10 difficulty."""
     out = []
+    N_SURF = 12
     for i in range(PER_TOPIC):
-        case = i % 10
+        case = i % N_SURF
         diff = difficulty_for_index(i)
         tier = difficulty_tier(diff)
-        rep = (i // 10) % 2
+        rep = (i // N_SURF) % 2
         source = f"OpenStax Vol. 1 §6.4 / Briggs §6.6 surface concept {case + 1}, item {i + 1}"
         n = 1 + tier + rep
         compute = None
+        axis_y = 0
+        axis_label = "y = 0"
+        method = "surface-x"
+        orientation = "vertical"
+        x_min = 0.0
         if case == 0:
             # Cone from a single line (only one linear concept)
             m = 1 + tier
@@ -3840,7 +4823,12 @@ def catalog_surface_varied():
             prompt = f"Find the surface area when \\(y={expr_latex(f)}\\) on \\([0,{n}]\\) is revolved about the line \\(y={axis}\\)."
             setup = f"Radius is \\({axis}-y\\): \\[S=2\\pi\\int_0^{{{n}}}({expr_latex(radius)})\\sqrt{{1+{m}^2}}\\,dx\\]"
             top = {"t": "lin", "a": m, "b": 1}
-            compute = {"f": f, "expr": radius * sp.sqrt(1 + m**2), "a": 0, "b": n, "label": "S", "scale": 2 * sp.pi}
+            axis_y = axis
+            axis_label = f"y = {axis}"
+            compute = {
+                "f": f, "expr": radius * sp.sqrt(1 + m**2), "a": 0, "b": n, "label": "S", "scale": 2 * sp.pi,
+                "parts": {"radius": expr_latex(radius)},
+            }
         elif case == 7:
             # y = x^2 about x-axis (parabola surface)
             f = x**2
@@ -3863,15 +4851,13 @@ def catalog_surface_varied():
             setup = f"\\[S=2\\pi\\int_0^{{{n}}}\\left({c}+\\frac{{{2 * k}}}{{3}}x^{{3/2}}\\right)\\sqrt{{1+{k * k}x}}\\,dx\\]"
             top = {"t": "pow-shift", "a": 2 * k / 3, "b": c, "n": 1.5}
             compute = {"f": f, "expr": integrand, "a": 0, "b": n, "label": "S", "scale": 2 * sp.pi}
-        else:
+        elif case == 9:
             # y = √(c - x) about x-axis — slant simplifies to elementary √(linear)
             c = 3 + tier + rep
             lo = 0
             hi = 1 + tier + rep
             f = sp.sqrt(c - x)
-            # y' = -1/(2√(c-x)); √(1+(y')²)=√(4(c-x)+1)/(2√(c-x))
-            # S = 2π ∫ y √(1+(y')²) dx = π ∫ √(4c-4x+1) dx
-            integrand = sp.sqrt(4 * c - 4 * x + 1) / 2  # so scale 2π * integrand = π√(...)
+            integrand = sp.sqrt(4 * c - 4 * x + 1) / 2
             S = 2 * sp.pi * sp.integrate(integrand, (x, lo, hi))
             prompt = (
                 f"Find the surface area when \\(y=\\sqrt{{{c}-x}}\\) on "
@@ -3883,7 +4869,7 @@ def catalog_surface_varied():
                 f"\\cdot\\frac{{\\sqrt{{4({c}-x)+1}}}}{{2\\sqrt{{{c}-x}}}}\\,dx"
                 f"=\\pi\\int_{{{lo}}}^{{{hi}}}\\sqrt{{{4 * c + 1}-4x}}\\,dx\\]"
             )
-            top = {"t": "sqrt", "a": 1}  # visual approx of √(c-x)
+            top = {"t": "sqrt", "a": 1}
             n = hi
             compute = {
                 "f": f,
@@ -3895,19 +4881,93 @@ def catalog_surface_varied():
                 "setup_display": setup,
                 "display_integrand": f"\\frac{{1}}{{2}}\\sqrt{{{4 * c + 1}-4x}}",
             }
-        x_min = locals().get("x_min", 0.0)
+        elif case == 10:
+            # y = m x revolved about the y-axis (radius = x)
+            m = 1 + tier
+            n = 1 + tier + rep
+            f = m * x
+            # S = 2π ∫ x √(1+(y')^2) dx about y-axis
+            slant = sp.sqrt(1 + m**2)
+            integrand = x * slant
+            S = 2 * sp.pi * sp.integrate(integrand, (x, 0, n))
+            y_eq = "x" if m == 1 else f"{m}x"
+            prompt = (
+                f"Find the surface area when \\(y={y_eq}\\) on \\([0,{n}]\\) "
+                f"is revolved about the \\(y\\)-axis."
+            )
+            setup = (
+                f"About the \\(y\\)-axis the radius is \\(x\\) (not \\(y\\)): "
+                f"\\[S=2\\pi\\int_0^{{{n}}}x\\sqrt{{1+{m}^2}}\\,dx\\]"
+            )
+            top = {"t": "lin", "a": m}
+            method = "surface-y"
+            axis_y = 0
+            axis_label = "x = 0"
+            compute = {
+                "f": f, "expr": integrand, "a": 0, "b": n, "label": "S", "scale": 2 * sp.pi,
+                "parts": {"radius": "x"},
+                "display_integrand": f"x\\sqrt{{1+{m}^2}}",
+                "setup_display": setup,
+            }
+        else:
+            # x = g(y) revolved about the x-axis (horizontal): e.g. x = √y or x = (y+c)/m
+            # S = 2π ∫ y √(1+(x')^2) dy
+            c = 1 + rep
+            m = 2 + tier  # x = (y + c)/m  ⇔  y = m x - c
+            hi = m + c if tier else (1 + c)
+            # Use x = 2√y (classic): y from 0 to n
+            n_y = 1 + tier + rep
+            g = 2 * sp.sqrt(y)  # x = 2√y
+            # x' = 1/√y; √(1+(x')^2) = √(1 + 1/y) = √((y+1)/y)
+            integrand = y * sp.sqrt(1 + (1 / sp.sqrt(y)) ** 2)
+            # domain avoid y=0 singularity: [1/4, n_y+1/4]
+            lo = sp.Rational(1, 4)
+            hi = lo + n_y
+            integrand = y * sp.sqrt(1 + 1 / y)
+            S = 2 * sp.pi * sp.integrate(integrand, (y, lo, hi))
+            prompt = (
+                f"Find the surface area when \\(x=2\\sqrt{{y}}\\) on "
+                f"\\(y\\in[{sp.latex(lo)},{sp.latex(hi)}]\\) is revolved about the \\(x\\)-axis."
+            )
+            setup = (
+                f"With \\(x=g(y)\\) about the \\(x\\)-axis, radius is \\(y\\): "
+                f"\\[S=2\\pi\\int_{{{sp.latex(lo)}}}^{{{sp.latex(hi)}}}y"
+                f"\\sqrt{{1+\\big(g'(y)\\big)^2}}\\,dy"
+                f"=2\\pi\\int_{{{sp.latex(lo)}}}^{{{sp.latex(hi)}}}y\\sqrt{{1+\\frac{{1}}{{y}}}}\\,dy\\]"
+            )
+            top = {"t": "pow", "a": 1 / 4, "n": 2}  # y = x^2/4
+            method = "surface-y"
+            orientation = "horizontal"
+            n = float(hi)
+            x_min = float(2 * sp.sqrt(lo))
+            axis_label = "y = 0"
+            compute = {
+                "f": g, "expr": integrand, "a": lo, "b": hi, "var": y, "label": "S", "scale": 2 * sp.pi,
+                "parts": {"radius": "y"},
+                "display_integrand": "y\\sqrt{1+1/y}",
+                "setup_display": setup,
+            }
         vp = {
-            "method": "surface-x",
+            "method": method,
+            "orientation": orientation,
             "xMin": float(x_min),
             "xMax": float(n) if not isinstance(n, float) else n,
-            "axisY": 0,
-            "axisLabel": "y = 0",
+            "axisY": axis_y if method == "surface-x" else 0,
+            "axisX": 0 if method == "surface-y" else None,
+            "axisLabel": axis_label,
             "bottom": {"t": "c", "v": 0},
             "top": top,
         }
+        if method == "surface-y" and orientation == "horizontal":
+            vp["yMin"] = float(compute["a"]) if compute else 0
+            vp["yMax"] = float(compute["b"]) if compute else n
+            vp["left"] = {"t": "c", "v": 0}
+            vp["right"] = {"t": "sqrt", "a": 2}
+        # drop None keys
+        vp = {k: v for k, v in vp.items() if v is not None}
         out.append(custom_problem(
             source, "Surface area", prompt, f"S = {sp.latex(sp.simplify(S))}", setup, "surface", diff, vp,
-            "Surface of revolution: each band has area \\(2\\pi\\times(\\text{radius})\\times(\\text{slant length } ds)\\).",
+            "Surface of revolution: each band has area \\(2\\pi\\times(\\text{radius to the axis})\\times(\\text{slant length } ds)\\). Radius is \\(y\\) about the \\(x\\)-axis and \\(x\\) about the \\(y\\)-axis.",
             compute=compute,
         ))
     return out
@@ -4086,13 +5146,16 @@ def catalog_fundamentals_conceptual():
 
 def catalog_centroids_conceptual():
     out = []
+    N_CENT = 14
     for i in range(PER_TOPIC):
-        case = i % 13
+        case = i % N_CENT
         diff = difficulty_for_index(i)
         tier = difficulty_tier(diff)
-        rep = (i // 13) % 2
+        rep = (i // N_CENT) % 2
         j = tier + rep
         b, h = 3 + j, 2 + j
+        cutout = None
+        parts = None
         source = f"OpenStax Vol. 1 §6.3 / Briggs §6.7 centroid concept {case + 1}, item {i + 1}"
         if case == 0:
             ans = f"\\left({frac_latex(sp.Rational(b, 2))},{frac_latex(sp.Rational(h, 2))}\\right)"
@@ -4130,7 +5193,15 @@ def catalog_centroids_conceptual():
             top = {"t": "sqrt", "a": h}
         elif case == 5:
             # Composite L-shape = big rectangle minus upper-right cutout.
+            # Visual must be the actual L (piecewise top), not a full rectangle.
             cutw, cuth = 1 + j, 1 + j
+            # Ensure cutout fits strictly inside the rectangle.
+            cutw = min(cutw, b - 1)
+            cuth = min(cuth, h - 1)
+            if cutw < 1:
+                cutw = 1
+            if cuth < 1:
+                cuth = 1
             A1, x1, y1 = b * h, sp.Rational(b, 2), sp.Rational(h, 2)
             A2, x2, y2 = cutw * cuth, b - sp.Rational(cutw, 2), h - sp.Rational(cuth, 2)
             A = A1 - A2
@@ -4140,7 +5211,26 @@ def catalog_centroids_conceptual():
             prompt = f"A \\({b}\\times {h}\\) rectangle has a \\({cutw}\\times {cuth}\\) rectangle removed from the upper-right corner. Find the centroid."
             setup = "\\[\\bar x=\\frac{A_1x_1-A_2x_2}{A_1-A_2},\\quad \\bar y=\\frac{A_1y_1-A_2y_2}{A_1-A_2}\\]"
             marker = {"x": float(xb.evalf()), "y": float(yb.evalf())}
-            top = {"t": "c", "v": h}
+            # L-profile: full height on [0, b-cutw], reduced height on [b-cutw, b].
+            split = float(b - cutw)
+            top = {
+                "t": "piecewise",
+                "segments": [
+                    {"min": 0, "max": split, "curve": {"t": "c", "v": float(h)}},
+                    {"min": split, "max": float(b), "curve": {"t": "c", "v": float(h - cuth)}},
+                ],
+            }
+            # Metadata for the animation: ghost of the removed piece + component centroids.
+            cutout = {
+                "xMin": float(b - cutw),
+                "yMin": float(h - cuth),
+                "xMax": float(b),
+                "yMax": float(h),
+            }
+            parts = [
+                {"x": float(x1), "y": float(y1), "role": "keep", "label": "A1"},
+                {"x": float(x2), "y": float(y2), "role": "remove", "label": "A2"},
+            ]
         elif case == 6:
             f = h + x
             _, xb, yb = centroid_from_top(f, 0, b)
@@ -4196,7 +5286,7 @@ def catalog_centroids_conceptual():
             top = {"t": "circle-upper", "R": R, "cx": 0, "cy": 0}
             b = R
             x_min = 0
-        else:
+        elif case == 12:
             base1, base2, height = 4 + j, 2 + j, 3 + j
             f = base1 + (base2 - base1) * x / height
             _, xb, yb = centroid_from_top(f, 0, height)
@@ -4207,17 +5297,89 @@ def catalog_centroids_conceptual():
             top = {"t": "lin", "a": (base2 - base1) / height, "b": base1}
             b = height
             x_min = 0
+        else:
+            # Horizontal strips: region between x = y^2 and x = c
+            hi = 2 + j
+            c = hi * hi
+            width = c - y**2
+            A = sp.integrate(width, (y, 0, hi))
+            # M_x = ∫ y * width dy; M_y = ∫ (1/2)(right^2 - left^2) dy
+            Mx = sp.integrate(y * width, (y, 0, hi))
+            My = sp.integrate((c**2 - (y**2) ** 2) / 2, (y, 0, hi))
+            xb = sp.simplify(My / A)
+            yb = sp.simplify(Mx / A)
+            ans = f"\\left({sp.latex(xb)},{sp.latex(yb)}\\right)"
+            prompt = (
+                f"Use horizontal strips to find the centroid of the region bounded by "
+                f"\\(x=y^2\\), \\(x={c}\\), and \\(y=0\\)."
+            )
+            setup = (
+                f"\\[A=\\int_0^{{{hi}}}({c}-y^2)\\,dy,\\quad"
+                f"\\bar y=\\frac{{1}}{{A}}\\int_0^{{{hi}}}y({c}-y^2)\\,dy,\\quad"
+                f"\\bar x=\\frac{{1}}{{A}}\\int_0^{{{hi}}}\\frac{{1}}{{2}}\\big(({c})^2-(y^2)^2\\big)\\,dy\\]"
+            )
+            marker = {"x": float(xb.evalf()), "y": float(yb.evalf())}
+            top = {"t": "sqrt", "a": 1}
+            b = c
+            x_min = 0
+            f = None  # handled with special compute below
+            compute_h = {
+                "expr": width, "a": 0, "b": hi, "var": y, "label": "A",
+                "parts": {"right": str(c), "left": "y^{2}", "var": "y", "orientation": "horizontal"},
+            }
         if "x_min" not in locals():
             x_min = 0
-        vp = {"method": "area", "xMin": float(x_min), "xMax": float(b), "bottom": {"t": "c", "v": 0}, "top": top, "marker": marker}
+        # method "centroid" drives strip geometry + balance narration in the visualizer.
+        vp = {
+            "method": "centroid",
+            "orientation": "horizontal" if case == 13 else "vertical",
+            "xMin": float(x_min),
+            "xMax": float(b),
+            "bottom": {"t": "c", "v": 0},
+            "top": top,
+            "marker": marker,
+            "sampleLabel": "sample y" if case == 13 else "sample x",
+            "measureLabel": "strip length" if case == 13 else "strip height",
+        }
+        if case == 13:
+            vp["yMin"] = 0
+            vp["yMax"] = float(hi)
+            vp["left"] = {"t": "pow", "a": 1, "n": 2}
+            vp["right"] = {"t": "c", "v": c}
+        if cutout is not None:
+            vp["cutout"] = cutout
+        if parts is not None:
+            vp["parts"] = parts
         # Full moment work when we have a height function f (integral cases only)
         compute = None
         f_local = locals().get("f")
+        if case == 13:
+            # Custom horizontal-strip centroid solution
+            steps = [
+                step(
+                    "Strategy: horizontal strips",
+                    "Integrate with respect to \\(y\\). Strip length is right − left; moments use the strip’s mid-\\(x\\) and height \\(y\\).",
+                ),
+                step("Area", f"\\[A=\\int_0^{{{hi}}}({c}-y^2)\\,dy={nice_latex(A)}\\]"),
+                step("Moment for \\(\\bar y\\)", f"\\[M_x=\\int_0^{{{hi}}}y({c}-y^2)\\,dy={nice_latex(Mx)}\\]"),
+                step("Moment for \\(\\bar x\\)", f"\\[M_y=\\int_0^{{{hi}}}\\frac12\\big(({c})^2-(y^2)^2\\big)\\,dy={nice_latex(My)}\\]"),
+                step("Centroid", f"\\[\\bar x=M_y/A={sp.latex(xb)},\\quad\\bar y=M_x/A={sp.latex(yb)}\\]"),
+                step("Final", f"\\[(\\bar x,\\bar y)={ans}\\]"),
+            ]
+            out.append({
+                "source": source, "title": "Centroid", "prompt": prompt,
+                "choices": mc_choices(f"(\\bar x,\\bar y): {ans}", f"2({ans})", f"{ans}/2", f"({c/2},{hi/2})"),
+                "steps": steps, "finalAnswer": f"(\\bar x,\\bar y): {ans}",
+                "insight": "Horizontal strips: length = right − left; \\(\\bar x\\) uses average \\(x\\) of each strip.",
+                "visual": "centroid", "difficulty": diff, "visualParams": vp,
+                "equations": equations_kit("centroid", setup),
+            })
+            continue
         if f_local is not None and case in {3, 4, 6, 7, 9}:
             compute = {"f": f_local, "a": 0, "b": b}
         elif f_local is not None and case == 8:
             compute = {"f": f_local, "a": 0, "b": sp.pi}
-        elif f_local is not None and case >= 12:
+        elif f_local is not None and case == 12:
             compute = {"f": f_local, "a": 0, "b": b}
         # Explicit algebra for simple closed forms (no skipping)
         if case == 0:
@@ -4245,6 +5407,38 @@ def catalog_centroids_conceptual():
                         "visualParams": vp, "equations": equations_kit("centroid", setup)})
             x_min = 0
             continue
+        if case == 5:
+            # Composite body algebra — not a single integral strip setup.
+            steps = [
+                step("Strategy: composite body", "Treat the L-shape as a large rectangle minus the removed corner rectangle."),
+                step("Large rectangle (keep)", f"\\[A_1={b}\\cdot{h}={A1},\\quad (\\bar x_1,\\bar y_1)=\\left({sp.latex(x1)},{sp.latex(y1)}\\right)\\]"),
+                step("Removed corner (subtract)", f"\\[A_2={cutw}\\cdot{cuth}={A2},\\quad (\\bar x_2,\\bar y_2)=\\left({sp.latex(x2)},{sp.latex(y2)}\\right)\\]"),
+                step("Net area", f"\\[A=A_1-A_2={A1}-{A2}={A}\\]"),
+                step("Weighted moments", setup),
+                step("Evaluate \\(\\bar x\\)", f"\\[\\bar x=\\frac{{A_1\\bar x_1-A_2\\bar x_2}}{{A}}=\\frac{{({A1})({sp.latex(x1)})-({A2})({sp.latex(x2)})}}{{{A}}}={sp.latex(xb)}\\]"),
+                step("Evaluate \\(\\bar y\\)", f"\\[\\bar y=\\frac{{A_1\\bar y_1-A_2\\bar y_2}}{{A}}=\\frac{{({A1})({sp.latex(y1)})-({A2})({sp.latex(y2)})}}{{{A}}}={sp.latex(yb)}\\]"),
+                step("Final centroid", f"\\[(\\bar x,\\bar y)={ans}\\]"),
+            ]
+            out.append({
+                "source": source,
+                "title": "Centroid",
+                "prompt": prompt,
+                "choices": mc_choices(
+                    f"(\\bar x,\\bar y)={ans}",
+                    f"(\\bar x,\\bar y)=\\left({sp.latex(x1)},{sp.latex(y1)}\\right)",
+                    f"(\\bar x,\\bar y)=\\left({sp.latex(xb)},{sp.latex(y1)}\\right)",
+                    f"(\\bar x,\\bar y)=\\left({sp.latex(x1)},{sp.latex(yb)}\\right)",
+                ),
+                "steps": steps,
+                "finalAnswer": f"(\\bar x,\\bar y)={ans}",
+                "insight": "Composite centroids: sum (or subtract) area×center contributions, then divide by net area.",
+                "visual": "centroid",
+                "difficulty": diff,
+                "visualParams": vp,
+                "equations": equations_kit("centroid", setup),
+            })
+            x_min = 0
+            continue
         x_min = 0
         out.append(custom_problem(
             source, "Centroid", prompt, f"(\\bar x,\\bar y): {ans}", setup, "centroid", diff, vp,
@@ -4256,11 +5450,12 @@ def catalog_centroids_conceptual():
 
 def catalog_inertia_conceptual():
     out = []
+    N_INERT = 16
     for i in range(PER_TOPIC):
-        case = i % 14
+        case = i % N_INERT
         diff = difficulty_for_index(i)
         tier = difficulty_tier(diff)
-        rep = (i // 14) % 2
+        rep = (i // N_INERT) % 2
         j = tier + rep
         b, h = 2 + j, 3 + j
         source = f"OpenStax Vol. 1 §6.6 / Briggs §6.7 inertia concept {case + 1}, item {i + 1}"
@@ -4415,7 +5610,7 @@ def catalog_inertia_conceptual():
             top = {"t": "lin", "a": (base2 - base1) / height, "b": base1}
             x_min = 0
             compute = {"expr": f**3 / 3, "a": 0, "b": xmax, "label": "I_x"}
-        else:
+        elif case == 13:
             base1, base2, height = 4 + j, 2 + j, 3 + j
             f, xmax = base1 + (base2 - base1) * x / height, height
             I = sp.integrate(x**2 * f, (x, 0, xmax))
@@ -4425,6 +5620,63 @@ def catalog_inertia_conceptual():
             top = {"t": "lin", "a": (base2 - base1) / height, "b": base1}
             x_min = 0
             compute = {"expr": x**2 * f, "a": 0, "b": xmax, "label": "I_y"}
+        elif case == 14:
+            # Horizontal strips: I_y about y-axis for region 0≤x≤c, 0≤y≤√x wait — region between x=y^2 and x=c
+            hi = 2 + j
+            c = hi * hi
+            # I_y = ∫_0^hi (1/3)(x_R^3 - x_L^3) dy = ∫ (1/3)(c^3 - y^6) dy
+            I = sp.integrate((c**3 - (y**2) ** 3) / 3, (y, 0, hi))
+            label = "I_y"
+            prompt = (
+                f"Use horizontal strips to find \\(I_y\\) (about the \\(y\\)-axis) for the region "
+                f"bounded by \\(x=y^2\\), \\(x={c}\\), and \\(y=0\\)."
+            )
+            setup = (
+                f"\\[I_y=\\int_0^{{{hi}}}\\frac{{1}}{{3}}\\big(({c})^3-(y^2)^3\\big)\\,dy\\]"
+            )
+            top = {"t": "sqrt", "a": 1}
+            xmax = c
+            x_min = 0
+            axis_extra = {
+                "orientation": "horizontal",
+                "yMin": 0,
+                "yMax": hi,
+                "left": {"t": "pow", "a": 1, "n": 2},
+                "right": {"t": "c", "v": c},
+            }
+            compute = {
+                "expr": (c**3 - y**6) / 3, "a": 0, "b": hi, "var": y, "label": "I_y",
+                "parts": {"f": f"{c}", "var": "y", "orientation": "horizontal"},
+                "display_integrand": f"\\frac{{1}}{{3}}\\big(({c})^3-y^6\\big)",
+                "setup_display": setup,
+            }
+        else:
+            # Horizontal strips: I_x = ∫ y^2 (right-left) dy
+            hi = 2 + j
+            c = hi * hi
+            I = sp.integrate(y**2 * (c - y**2), (y, 0, hi))
+            label = "I_x"
+            prompt = (
+                f"Use horizontal strips to find \\(I_x\\) (about the \\(x\\)-axis) for the region "
+                f"bounded by \\(x=y^2\\), \\(x={c}\\), and \\(y=0\\)."
+            )
+            setup = f"\\[I_x=\\int_0^{{{hi}}}y^2({c}-y^2)\\,dy\\]"
+            top = {"t": "sqrt", "a": 1}
+            xmax = c
+            x_min = 0
+            axis_extra = {
+                "orientation": "horizontal",
+                "yMin": 0,
+                "yMax": hi,
+                "left": {"t": "pow", "a": 1, "n": 2},
+                "right": {"t": "c", "v": c},
+            }
+            compute = {
+                "expr": y**2 * (c - y**2), "a": 0, "b": hi, "var": y, "label": "I_x",
+                "parts": {"f": f"{c}-y^{{2}}", "var": "y", "orientation": "horizontal"},
+                "display_integrand": f"y^{{2}}({c}-y^{{2}})",
+                "setup_display": setup,
+            }
         if case == 2:
             # Polar moment = I_x + I_y with both shown fully
             f, xmax = sp.Integer(h), b
@@ -4551,8 +5803,12 @@ def build_bank():
                 f"{topic}: difficulty mix {counts}, need "
                 f"easy={DIFFICULTY_EASY}, medium={DIFFICULTY_MEDIUM}, hard={DIFFICULTY_HARD}"
             )
-        if len(concepts) < 10:
-            raise SystemExit(f"{topic}: only {len(concepts)} distinct concepts, need ≥ 10 (found {sorted(concepts)})")
+        min_concepts = 40 if topic == "applications" else 10
+        if len(concepts) < min_concepts:
+            raise SystemExit(
+                f"{topic}: only {len(concepts)} distinct concepts, need ≥ {min_concepts} "
+                f"(found {sorted(concepts)})"
+            )
     return bank
 
 

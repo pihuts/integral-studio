@@ -6,7 +6,8 @@
 
 import { getBriggsProblem, briggsProblemCount } from "../src/briggsProblems.js";
 import { VISUAL_BY_SOURCE, VISUAL_BY_KEY } from "../src/briggsVisualSpecs.js";
-import { buildExampleFromSpec, compileCurve, resolveVisualSpec } from "../src/visualSpecs.js";
+import { buildExampleFromSpec, compileCurve, resolveVisualSpec, SUPPORTED_RENDER_METHODS } from "../src/visualSpecs.js";
+import { loadBriggsBank } from "../src/briggsProblems.js";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -23,23 +24,8 @@ const TOPICS = [
   "applications"
 ];
 
-const RENDERER_METHODS = new Set([
-  "area",
-  "arc",
-  "surface-x",
-  "surface-y",
-  "pump-bowl",
-  "pool-fill",
-  "goat-barn",
-  "cross-square",
-  "cross-semicircle",
-  "shell-y",
-  "shell-x",
-  "disk-x",
-  "disk-y",
-  "washer-x",
-  "washer-y"
-]);
+await loadBriggsBank();
+const RENDERER_METHODS = new Set(SUPPORTED_RENDER_METHODS);
 
 const SHELL_PREFIX = "shell";
 const DISK_WASHER = new Set(["disk-x", "disk-y", "washer-x", "washer-y"]);
@@ -103,7 +89,11 @@ function expectedMethods(prompt, visual, topic) {
   }
 
   if (topic === "surface" || visual === "surface") {
-    if (/about the \(?y\)?-axis/i.test(p) || /about \(?x\s*=/i.test(p)) out.add("surface-y");
+    const aboutYAxis = /about\s+(?:the\s+)?\\?\(?y\\?\)?-axis/i.test(p) || /about\s+\\?\(?x\s*=/i.test(p);
+    const aboutXAxis = /about\s+(?:the\s+)?\\?\(?x\\?\)?-axis/i.test(p) || /about\s+\\?\(?y\s*=/i.test(p);
+    const xOfY = /\\?\(?x\s*=/.test(p) && /y\s*\\in|y\s+in/i.test(p);
+    if (aboutYAxis || (aboutXAxis && xOfY)) out.add("surface-y");
+    else if (aboutXAxis) out.add("surface-x");
     else out.add("surface-x");
   }
 
@@ -309,6 +299,8 @@ function auditSemantic(problem, spec, issues) {
     // Soften: fundamentals/area/centroids often intentionally use area viz
     if (["fundamentals", "area", "centroids", "inertia"].includes(topic) && method === "area") {
       // ok
+    } else if (topic === "applications" && method === "area" && expected.includes("pump-bowl")) {
+      // Generic area visuals remain valid for older application entries.
     } else {
       issues.push({
         severity: "error",

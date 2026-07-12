@@ -1,8 +1,26 @@
 import { attachVisualSpec } from "./briggsVisualSpecs.js";
-import { GENERATED_BANK, QUESTIONS_PER_TOPIC } from "./generatedBank.js";
 
-const BANK = GENERATED_BANK;
+let BANK = {};
+let bankPromise;
 
+export const QUESTIONS_PER_TOPIC = 50;
+
+/** Load the large generated bank only when practice is actually opened. */
+export function loadBriggsBank() {
+  if (!bankPromise) {
+    bankPromise = import("./generatedBank.js")
+      .then(({ GENERATED_BANK }) => {
+        BANK = GENERATED_BANK;
+        return BANK;
+      })
+      .catch(error => {
+        // Let the UI retry after a transient chunk/network failure.
+        bankPromise = null;
+        throw error;
+      });
+  }
+  return bankPromise;
+}
 /**
  * Strict Calc-1/2 bans — scan the whole problem (prompt, steps, equations, …).
  *
@@ -67,6 +85,8 @@ const CONCEPT_TITLES = {
     8: "Area under a root function",
     9: "Area under a reciprocal/rational",
     10: "Piecewise lower boundary",
+    11: "Horizontal strips: parabola and vertical line",
+    12: "Horizontal strips: parabola and line",
   },
   volumes: {
     1: "Disk method: curve about x-axis",
@@ -79,6 +99,8 @@ const CONCEPT_TITLES = {
     8: "Disk about y = h with sqrt radius",
     9: "Shells for region between curves",
     10: "Disk with square-root radius",
+    11: "Horizontal disks about y-axis (x = g(y))",
+    12: "Horizontal shells about x-axis",
   },
   centroids: {
     1: "Rectangle centroid",
@@ -94,6 +116,7 @@ const CONCEPT_TITLES = {
     11: "Semicircular lamina",
     12: "Quarter-circular lamina",
     13: "Trapezoidal lamina",
+    14: "Horizontal-strip centroid",
   },
   arc: {
     1: "Arc length of a line",
@@ -118,6 +141,8 @@ const CONCEPT_TITLES = {
     8: "Surface of a parabola",
     9: "Surface of a shifted power curve",
     10: "Surface of y = √(c − x)",
+    11: "y = mx about the y-axis",
+    12: "x = g(y) about the x-axis",
   },
   inertia: {
     1: "I_x of a rectangle",
@@ -134,20 +159,50 @@ const CONCEPT_TITLES = {
     12: "I_x of a quarter circle",
     13: "I_x of a trapezoid",
     14: "I_y of a trapezoid",
+    15: "I_y with horizontal strips",
+    16: "I_x with horizontal strips",
   },
   applications: {
-    1: "Spring work (Hooke)",
-    2: "Variable force work",
-    3: "Pumping a rectangular tank",
-    4: "Lifting a rope",
-    5: "Distance from velocity",
-    6: "Accumulated flow volume",
-    7: "Energy from power",
-    8: "Total profit change",
-    9: "Work with a sqrt force",
-    10: "Drug accumulation",
-    11: "Walkway area difference",
-    12: "Trapezoidal lot area",
+    1: "Spring from natural length",
+    2: "Spring already stretched",
+    3: "Compress a spring",
+    4: "Spring between two stretches",
+    5: "Linear variable force",
+    6: "Quadratic force work",
+    7: "Sqrt force work",
+    8: "Exponential force work",
+    9: "Sinusoidal force work",
+    10: "Piecewise force work",
+    11: "Pump rectangular tank to top",
+    12: "Pump rectangular tank to spout",
+    13: "Pump cylindrical tank",
+    14: "Pump triangular trough",
+    15: "Pump top half of tank",
+    16: "Pump with y measured from top",
+    17: "Pump hemispherical bowl",
+    18: "Pump partially filled tall tank",
+    19: "Lift entire rope",
+    20: "Lift part of a rope",
+    21: "Chain with end weight",
+    22: "Cable from ground to roof",
+    23: "Half chain hanging off table",
+    24: "Distance from linear velocity",
+    25: "Distance from quadratic velocity",
+    26: "Distance from sinusoidal velocity",
+    27: "Accumulated flow (linear rate)",
+    28: "Accumulated flow (exponential)",
+    29: "Energy from power (quadratic)",
+    30: "Energy from power (poly)",
+    31: "Total profit change",
+    32: "Drug accumulation",
+    33: "Walkway area difference",
+    34: "Trapezoidal lot area",
+    35: "Infusion accumulation",
+    36: "Net change from rate",
+    37: "Reciprocal force work",
+    38: "Leaking sandbag lift",
+    39: "Inverse-square force work",
+    40: "Preloaded spring work",
   },
 };
 
@@ -215,5 +270,3 @@ export function conceptCoverage(topic) {
     conceptCount: concepts.size,
   };
 }
-
-export { QUESTIONS_PER_TOPIC };
