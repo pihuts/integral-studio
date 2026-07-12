@@ -1,7 +1,6 @@
 import "./style.css";
 import { getBriggsProblem, briggsProblemCount, loadBriggsBank, QUESTIONS_PER_TOPIC } from "./briggsProblems.js";
 import { buildLegacySpec, resolveVisualSpec, problemHasDualMethod } from "./visualSpecs.js";
-import { REFERENCES, openStaxWebUrl, sourceLink } from "./references.js";
 
 let katex;
 let practiceDependenciesPromise;
@@ -328,19 +327,6 @@ const richMath = value => {
   }
   return result;
 };
-/** Allow only relative app paths or http(s) URLs — blocks javascript:/data: links. */
-const safeUrl = value => {
-  if (value == null || value === "") return "";
-  const raw = String(value).trim();
-  if (raw.startsWith("/") && !raw.startsWith("//") && !raw.includes("\\")) return raw;
-  try {
-    const url = new URL(raw);
-    if (url.protocol === "https:" || url.protocol === "http:") return url.href;
-  } catch {
-    /* ignore invalid */
-  }
-  return "";
-};
 const mathDescription = value => normalizeLatex(value)
   .replace(/\\frac\{([^{}]+)\}\{([^{}]+)\}/g, "$1 over $2")
   .replace(/\\sqrt\{([^{}]+)\}/g, "square root of $1")
@@ -356,30 +342,6 @@ const choice = (id, latex, label) => ({ id, latex, label });
 const shuffle = values => [...values].sort(() => Math.random() - 0.5);
 const num = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
 const step = (title, body) => ({ title, body });
-
-function renderSourceTag(source = "") {
-  if (!source) return "";
-  const href = safeUrl(sourceLink(source));
-  const inner = escape(source);
-  return href
-    ? `<a class="question-source" href="${escape(href)}" target="_blank" rel="noopener noreferrer">${inner}</a>`
-    : `<span class="question-source">${inner}</span>`;
-}
-
-function renderReferenceCard(ref) {
-  const pdfHref = safeUrl(ref.publicPath);
-  const webHref = safeUrl(ref.webBase ? openStaxWebUrl("5.2") : null);
-  const links = [
-    pdfHref ? `<a class="reference-link" href="${escape(pdfHref)}" target="_blank" rel="noopener noreferrer">PDF</a>` : "",
-    webHref ? `<a class="reference-link" href="${escape(webHref)}" target="_blank" rel="noopener noreferrer">Web</a>` : ""
-  ].filter(Boolean).join("");
-  return `
-    <article class="reference-card">
-      <h3 class="reference-title">${escape(ref.title)}</h3>
-      <p class="reference-meta">${escape(ref.authors)} · ${escape(ref.file)}</p>
-      <div class="reference-links">${links}</div>
-    </article>`;
-}
 
 function finalizeProblem(item) {
   item.choices = shuffle(item.choices);
@@ -1018,12 +980,6 @@ function renderLanding() {
         </section>
         <button type="button" id="start-practice" class="primary landing-start" ${state.practiceLoading ? "disabled" : ""} aria-busy="${state.practiceLoading}">${state.practiceLoading ? "Loading practice..." : "Start practice"}</button>
         ${state.practiceError ? `<p class="load-error" role="alert">${escape(state.practiceError)}</p>` : ""}
-        <section class="landing-section landing-references" aria-labelledby="refs-heading">
-          <h2 id="refs-heading" class="landing-label">References</h2>
-          <div class="reference-grid">
-            ${REFERENCES.map(renderReferenceCard).join("")}
-          </div>
-        </section>
       </main>
     </div>`;
 
@@ -1038,8 +994,13 @@ function renderLanding() {
       selectTopic(btn.dataset.topic, true);
     });
     btn.addEventListener("keydown", event => {
-      if (!["ArrowDown", "ArrowRight", "ArrowUp", "ArrowLeft"].includes(event.key)) return;
+      if (!["ArrowDown", "ArrowRight", "ArrowUp", "ArrowLeft", "Home", "End"].includes(event.key)) return;
       event.preventDefault();
+      if (event.key === "Home" || event.key === "End") {
+        const next = topicButtons[event.key === "Home" ? 0 : topicButtons.length - 1];
+        selectTopic(next.dataset.topic, true);
+        return;
+      }
       const direction = event.key === "ArrowDown" || event.key === "ArrowRight" ? 1 : -1;
       const next = topicButtons[(index + direction + topicButtons.length) % topicButtons.length];
       selectTopic(next.dataset.topic, true);
@@ -1121,10 +1082,10 @@ function renderPractice(options = {}) {
           </section>
           <section class="problem-panel" aria-labelledby="question-title">
             <div class="question-top">
-              <span class="question-number">${escape(p.title)}${p.source ? renderSourceTag(p.source) : ""}</span>
+              <span class="question-number">${escape(p.title)}</span>
               <span class="question-index">Q${state.questionIndex + 1}</span>
             </div>
-            <h2 id="question-title">${richMath(p.prompt)}</h2>
+            <h1 id="question-title">${richMath(p.prompt)}</h1>
             <div class="choices" role="radiogroup" aria-labelledby="question-title"${state.checked ? ' aria-describedby="question-feedback"' : ""}>
               ${p.choices.map((option, index) => {
                 const isCorrect = state.checked && option.id === p.correctId;
@@ -1233,8 +1194,15 @@ function bindPracticeEvents(preserveVisual = false) {
       renderPractice({ preserveVisual: true, focusChoice: id });
     });
     button.addEventListener("keydown", event => {
-      if (!["ArrowDown", "ArrowRight", "ArrowUp", "ArrowLeft"].includes(event.key)) return;
+      if (!["ArrowDown", "ArrowRight", "ArrowUp", "ArrowLeft", "Home", "End"].includes(event.key)) return;
       event.preventDefault();
+      if (event.key === "Home" || event.key === "End") {
+        const next = choiceButtons[event.key === "Home" ? 0 : choiceButtons.length - 1];
+        const nextId = next.dataset.choice;
+        state.selected = nextId;
+        renderPractice({ preserveVisual: true, focusChoice: nextId });
+        return;
+      }
       const direction = event.key === "ArrowDown" || event.key === "ArrowRight" ? 1 : -1;
       const nextIndex = (index + direction + choiceButtons.length) % choiceButtons.length;
       const nextId = choiceButtons[nextIndex].dataset.choice;

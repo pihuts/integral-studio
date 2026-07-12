@@ -39,8 +39,13 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
     };
     const canvasColor = parseCanvasColor(query.get("canvas"));
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: "high-performance" });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    const coarsePointer = window.matchMedia("(pointer: coarse)").matches;
+    const renderer = new THREE.WebGLRenderer({
+      antialias: !coarsePointer,
+      alpha: false,
+      powerPreference: coarsePointer ? "low-power" : "high-performance"
+    });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, coarsePointer ? 1.25 : 1.5));
     renderer.setClearColor(canvasColor, 1);
     renderer.shadowMap.enabled = false;
     sceneHost.appendChild(renderer.domElement);
