@@ -62,6 +62,15 @@ def strip_hyperbolic_expr(expr):
             return e
     except Exception:
         return e
+    # Prefer a real branch when sympy returns a piecewise complex/hyperbolic form
+    if isinstance(e, sp.Piecewise):
+        for piece, _cond in e.args:
+            try:
+                p = strip_hyperbolic_expr(piece)
+                if not (hasattr(p, "has") and p.has(*_HYPERBOLIC_FUNCS)):
+                    return p
+            except Exception:
+                continue
     for rewriter in (sp.log, sp.exp):
         try:
             e2 = sp.simplify(e.rewrite(rewriter))
@@ -73,11 +82,27 @@ def strip_hyperbolic_expr(expr):
     return e
 
 
+# Every sp.latex call must strip hyperbolics — answers/finalAnswer often use sp.latex directly.
+_orig_sp_latex = sp.latex
+
+
 def sympy_latex(expr, var=None) -> str:
     e = strip_hyperbolic_expr(expr)
     if var is not None:
-        return sp.latex(e, symbol_names={var: str(var)})
-    return sp.latex(e)
+        return _orig_sp_latex(e, symbol_names={var: str(var)})
+    return _orig_sp_latex(e)
+
+
+def _latex_no_hyperbolic(expr, *args, **kwargs):
+    try:
+        if hasattr(expr, "has"):
+            expr = strip_hyperbolic_expr(expr)
+    except Exception:
+        pass
+    return _orig_sp_latex(expr, *args, **kwargs)
+
+
+sp.latex = _latex_no_hyperbolic
 
 
 def frac_latex(val) -> str:
