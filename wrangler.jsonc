@@ -5,6 +5,11 @@
   "observability": {
     "enabled": true
   },
+  // Cloudflare CI runs `npx wrangler deploy` without a separate build step.
+  // Run Vite first so ./dist exists for assets.directory.
+  "build": {
+    "command": "npm run build"
+  },
   // Static Vite build output — no Worker script required.
   "assets": {
     "directory": "./dist",
