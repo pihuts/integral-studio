@@ -7311,10 +7311,10 @@ export const GENERATED_BANK = {
       visual: "curve",
       difficulty: "easy",
       choices: [
-        { id: "a", latex: "- \\sqrt{2} - \\sinh^{-1}{(e^{-1} )} + \\ln{(1 + \\sqrt{2} )} + \\sqrt{1 + e^{2}}", label: "Correct" },
-        { id: "b", latex: "- \\sinh^{-1}{(e^{-1} )} + \\sqrt{1 + e^{2}}", label: "Common setup error" },
-        { id: "c", latex: "- \\ln{(1 + \\sqrt{2} )} + \\sqrt{2}", label: "Missing factor or bound" },
-        { id: "d", latex: "-1 + e", label: "Arithmetic/axis slip" },
+        { id: "a", latex: "\\sqrt{1+e^{2}}+\\ln(1+\\sqrt{2})-\\sqrt{2}-\\sinh^{-1}(e^{-1})", label: "Correct" },
+        { id: "b", latex: "\\sqrt{1+e^{2}}-\\sinh^{-1}(e^{-1})", label: "Common setup error" },
+        { id: "c", latex: "\\sqrt{2}-\\ln(1+\\sqrt{2})", label: "Missing factor or bound" },
+        { id: "d", latex: "e-1", label: "Arithmetic/axis slip" },
       ],
       steps: [
         { title: "Strategy: hypotenuse of tiny steps", body: "A short curve segment has horizontal change \\(dx\\) and vertical change \\(dy=f'(x)\\,dx\\). Length is the hypotenuse." },
@@ -7633,10 +7633,10 @@ export const GENERATED_BANK = {
       visual: "curve",
       difficulty: "easy",
       choices: [
-        { id: "a", latex: "- \\sqrt{2} - \\sinh^{-1}{(e^{-1} )} + \\ln{(1 + \\sqrt{2} )} + \\sqrt{1 + e^{2}}", label: "Correct" },
-        { id: "b", latex: "- \\sinh^{-1}{(e^{-1} )} + \\sqrt{1 + e^{2}}", label: "Common setup error" },
-        { id: "c", latex: "- \\ln{(1 + \\sqrt{2} )} + \\sqrt{2}", label: "Missing factor or bound" },
-        { id: "d", latex: "-1 + e", label: "Arithmetic/axis slip" },
+        { id: "a", latex: "\\sqrt{1+e^{2}}+\\ln(1+\\sqrt{2})-\\sqrt{2}-\\sinh^{-1}(e^{-1})", label: "Correct" },
+        { id: "b", latex: "\\sqrt{1+e^{2}}-\\sinh^{-1}(e^{-1})", label: "Common setup error" },
+        { id: "c", latex: "\\sqrt{2}-\\ln(1+\\sqrt{2})", label: "Missing factor or bound" },
+        { id: "d", latex: "e-1", label: "Arithmetic/axis slip" },
       ],
       steps: [
         { title: "Strategy: hypotenuse of tiny steps", body: "A short curve segment has horizontal change \\(dx\\) and vertical change \\(dy=f'(x)\\,dx\\). Length is the hypotenuse." },
@@ -7955,10 +7955,10 @@ export const GENERATED_BANK = {
       visual: "curve",
       difficulty: "medium",
       choices: [
-        { id: "a", latex: "- \\sqrt{2} - \\sinh^{-1}{(e^{-1} )} + \\ln{(1 + \\sqrt{2} )} + \\sqrt{1 + e^{2}}", label: "Correct" },
-        { id: "b", latex: "- \\sinh^{-1}{(e^{-1} )} + \\sqrt{1 + e^{2}}", label: "Common setup error" },
-        { id: "c", latex: "- \\ln{(1 + \\sqrt{2} )} + \\sqrt{2}", label: "Missing factor or bound" },
-        { id: "d", latex: "-1 + e", label: "Arithmetic/axis slip" },
+        { id: "a", latex: "\\sqrt{1+e^{2}}+\\ln(1+\\sqrt{2})-\\sqrt{2}-\\sinh^{-1}(e^{-1})", label: "Correct" },
+        { id: "b", latex: "\\sqrt{1+e^{2}}-\\sinh^{-1}(e^{-1})", label: "Common setup error" },
+        { id: "c", latex: "\\sqrt{2}-\\ln(1+\\sqrt{2})", label: "Missing factor or bound" },
+        { id: "d", latex: "e-1", label: "Arithmetic/axis slip" },
       ],
       steps: [
         { title: "Strategy: hypotenuse of tiny steps", body: "A short curve segment has horizontal change \\(dx\\) and vertical change \\(dy=f'(x)\\,dx\\). Length is the hypotenuse." },
@@ -8277,10 +8277,10 @@ export const GENERATED_BANK = {
       visual: "curve",
       difficulty: "medium",
       choices: [
-        { id: "a", latex: "- \\sqrt{2} - \\sinh^{-1}{(e^{-2} )} + \\ln{(1 + \\sqrt{2} )} + \\sqrt{1 + e^{4}}", label: "Correct" },
-        { id: "b", latex: "- \\sinh^{-1}{(e^{-2} )} + \\sqrt{1 + e^{4}}", label: "Common setup error" },
-        { id: "c", latex: "- \\ln{(1 + \\sqrt{2} )} + \\sqrt{2}", label: "Missing factor or bound" },
-        { id: "d", latex: "-1 + e^{2}", label: "Arithmetic/axis slip" },
+        { id: "a", latex: "\\sqrt{1+e^{4}}+\\ln(1+\\sqrt{2})-\\sqrt{2}-\\sinh^{-1}(e^{-2})", label: "Correct" },
+        { id: "b", latex: "\\sqrt{1+e^{4}}-\\sinh^{-1}(e^{-2})", label: "Common setup error" },
+        { id: "c", latex: "\\sqrt{2}-\\ln(1+\\sqrt{2})", label: "Missing factor or bound" },
+        { id: "d", latex: "e^{2}-1", label: "Arithmetic/axis slip" },
       ],
       steps: [
         { title: "Strategy: hypotenuse of tiny steps", body: "A short curve segment has horizontal change \\(dx\\) and vertical change \\(dy=f'(x)\\,dx\\). Length is the hypotenuse." },

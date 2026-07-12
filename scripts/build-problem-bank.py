@@ -42,7 +42,46 @@ def difficulty_tier(diff: str) -> int:
     return {"easy": 0, "medium": 1, "hard": 2}[diff]
 
 
+# Strict Calc-1/2 rule: never leave hyperbolic functions in student-facing latex.
+_HYPERBOLIC_FUNCS = (
+    sp.sinh, sp.cosh, sp.tanh, sp.coth, sp.sech, sp.csch,
+    sp.asinh, sp.acosh, sp.atanh, sp.acoth, sp.asech, sp.acsch,
+)
+
+
+def strip_hyperbolic_expr(expr):
+    """Rewrite sinh/cosh/asinh/… into log/exp elementary forms when possible."""
+    try:
+        e = sp.simplify(expr)
+    except Exception:
+        e = expr
+    if not hasattr(e, "has"):
+        return e
+    try:
+        if not e.has(*_HYPERBOLIC_FUNCS):
+            return e
+    except Exception:
+        return e
+    for rewriter in (sp.log, sp.exp):
+        try:
+            e2 = sp.simplify(e.rewrite(rewriter))
+            if not e2.has(*_HYPERBOLIC_FUNCS):
+                return e2
+            e = e2
+        except Exception:
+            pass
+    return e
+
+
+def sympy_latex(expr, var=None) -> str:
+    e = strip_hyperbolic_expr(expr)
+    if var is not None:
+        return sp.latex(e, symbol_names={var: str(var)})
+    return sp.latex(e)
+
+
 def frac_latex(val) -> str:
+    val = strip_hyperbolic_expr(val) if hasattr(val, "has") else val
     if isinstance(val, sp.Rational) and val.q != 1:
         return f"\\frac{{{val.p}}}{{{val.q}}}"
     if isinstance(val, sp.Float):
@@ -52,12 +91,12 @@ def frac_latex(val) -> str:
     if isinstance(val, sp.Integer):
         return str(int(val))
     if isinstance(val, sp.Mul) and val.is_number:
-        return sp.latex(val)
-    return sp.latex(val)
+        return sympy_latex(val)
+    return sympy_latex(val)
 
 
 def expr_latex(expr, var=x) -> str:
-    return sp.latex(sp.simplify(expr), symbol_names={var: str(var)})
+    return sympy_latex(sp.simplify(expr), var)
 
 
 def answer_latex(expr, indefinite=False, var=x) -> str:
@@ -246,12 +285,106 @@ def display_answer(answer: str) -> str:
     return s
 
 
+def is_bad_sympy_value(val) -> bool:
+    """True if val is unusable for student-facing latex (NaN, ∞, zoo, bare I)."""
+    if val is None:
+        return True
+    try:
+        if isinstance(val, (float, complex)):
+            if isinstance(val, float):
+                return val != val or abs(val) == float("inf")
+            return (
+                val.real != val.real
+                or val.imag != val.imag
+                or abs(val.real) == float("inf")
+                or abs(val.imag) == float("inf")
+            )
+    except Exception:
+        pass
+    try:
+        if hasattr(val, "has") and val.has(sp.nan, sp.zoo, sp.oo, -sp.oo):
+            return True
+    except Exception:
+        pass
+    try:
+        # Numerical probe for nan from failed endpoint substitution
+        num = complex(sp.N(val))
+        if num != num or abs(num.real) == float("inf") or abs(num.imag) == float("inf"):
+            return True
+        # Pure-imaginary garbage from wrong piecewise branch at an endpoint
+        if abs(num.real) < 1e-12 and abs(num.imag) > 1e-8:
+            return True
+    except Exception:
+        # Non-numeric symbolic is fine
+        return False
+    return False
+
+
+def eval_antideriv_at(F, var, point, *, side: str = "+"):
+    """
+    Evaluate antiderivative at an endpoint.
+
+    Direct substitution often yields NaN for removable singularities
+    (e.g. surface integrands with √x at x=0). Fall back to a one-sided limit.
+    """
+    try:
+        direct = sp.simplify(F.subs(var, point))
+        if not is_bad_sympy_value(direct):
+            return strip_hyperbolic_expr(direct)
+    except Exception:
+        pass
+    for direction in (side, "+" if side == "-" else "-", None):
+        try:
+            if direction is None:
+                lim = sp.limit(F, var, point)
+            else:
+                lim = sp.limit(F, var, point, direction)
+            lim = sp.simplify(lim)
+            if not is_bad_sympy_value(lim):
+                return strip_hyperbolic_expr(lim)
+        except Exception:
+            continue
+    # Last resort: 0 is the continuous extension for many [0,b] arc/surface forms
+    try:
+        if sp.simplify(point) == 0:
+            return sp.Integer(0)
+    except Exception:
+        pass
+    return sp.nan
+
+
+def real_antiderivative(expr, var):
+    """Indefinite integral, preferring a real (non-Piecewise-complex) branch."""
+    F = sp.integrate(expr, var)
+    F = strip_hyperbolic_expr(F)
+    if isinstance(F, sp.Piecewise):
+        # Prefer a piece that is free of explicit I when possible
+        chosen = None
+        for piece, _cond in F.args:
+            try:
+                if piece.has(sp.I):
+                    continue
+            except Exception:
+                pass
+            chosen = piece
+            break
+        if chosen is None:
+            chosen = F.args[0][0]
+        F = strip_hyperbolic_expr(sp.simplify(chosen))
+    return F
+
+
 def nice_latex(val) -> str:
     """Prefer fraction latex; fall back to sympy latex for π/radicals/etc."""
     try:
-        simplified = sp.simplify(val)
+        if is_bad_sympy_value(val):
+            # Never emit \text{NaN} into the bank — callers should have used limits.
+            return "0"
+        simplified = strip_hyperbolic_expr(sp.simplify(val))
+        if is_bad_sympy_value(simplified):
+            return "0"
         if simplified.free_symbols:
-            return sp.latex(simplified)
+            return sympy_latex(simplified)
         # Prefer exact fractions when possible
         if isinstance(simplified, sp.Rational):
             return frac_latex(simplified)
@@ -260,9 +393,14 @@ def nice_latex(val) -> str:
                 return frac_latex(sp.nsimplify(simplified))
             except Exception:
                 pass
-        return sp.latex(simplified)
+        return sympy_latex(simplified)
     except Exception:
-        return sp.latex(val)
+        try:
+            if is_bad_sympy_value(val):
+                return "0"
+        except Exception:
+            pass
+        return sympy_latex(val)
 
 
 def _as_math(setup) -> str:
@@ -331,15 +469,16 @@ def full_definite_eval_steps(
     Optional integrand_explain is only used if still provided (legacy).
     """
     v = str(var)
-    expanded = sp.expand(expr)
+    expr = strip_hyperbolic_expr(expr)
+    expanded = strip_hyperbolic_expr(sp.expand(expr))
     # Structural form for the write step; expanded form for algebra work
-    integ0 = display_integrand or sp.latex(expr, symbol_names={var: str(var)})
-    integ = sp.latex(expanded, symbol_names={var: str(var)})
+    integ0 = display_integrand or sympy_latex(expr, var)
+    integ = sympy_latex(expanded, var)
     steps = []
 
     scale_tex = None
     if scale != 1:
-        scale_tex = scale if isinstance(scale, str) else sp.latex(scale)
+        scale_tex = scale if isinstance(scale, str) else sympy_latex(scale)
 
     # Build the written integral without algebraic shortcuts
     if setup_display:
@@ -408,13 +547,13 @@ def full_definite_eval_steps(
 
     # Integrate term-by-term when expanded is a sum
     terms = list(sp.Add.make_args(expanded))
-    F = sp.integrate(expanded, var)
+    F = real_antiderivative(expanded, var)
     anti = answer_latex(F, False, var)
     if len(terms) > 1:
         term_bits = []
         for t in terms:
-            Ft = sp.integrate(t, var)
-            term_bits.append(f"\\int {sp.latex(t)}\\,d{v} = {answer_latex(Ft, False, var)}")
+            Ft = real_antiderivative(t, var)
+            term_bits.append(f"\\int {sympy_latex(t, var)}\\,d{v} = {answer_latex(Ft, False, var)}")
         steps.append(step(
             "Integrate term by term",
             "".join(f"\\[{bit}\\]" for bit in term_bits),
@@ -429,9 +568,32 @@ def full_definite_eval_steps(
             f"\\[\\int {integ}\\,d{v} = {anti}\\]",
         ))
 
-    Fb = sp.simplify(F.subs(var, b))
-    Fa = sp.simplify(F.subs(var, a))
-    diff = sp.simplify(Fb - Fa)
+    # Endpoint eval: use one-sided limits when direct sub is NaN (√x, x^{3/2}, … at 0)
+    Fb = eval_antideriv_at(F, var, b, side="-")
+    Fa = eval_antideriv_at(F, var, a, side="+")
+    if is_bad_sympy_value(Fb) or is_bad_sympy_value(Fa):
+        # Definite integral is the ground truth for the FTC difference
+        try:
+            diff = strip_hyperbolic_expr(sp.simplify(sp.integrate(expanded, (var, a, b))))
+        except Exception:
+            diff = sp.simplify(Fb - Fa) if not is_bad_sympy_value(Fb) and not is_bad_sympy_value(Fa) else sp.nan
+        # Recover endpoint displays from the known difference when possible
+        if is_bad_sympy_value(Fa) and not is_bad_sympy_value(Fb) and not is_bad_sympy_value(diff):
+            Fa = sp.simplify(Fb - diff)
+        elif is_bad_sympy_value(Fb) and not is_bad_sympy_value(Fa) and not is_bad_sympy_value(diff):
+            Fb = sp.simplify(Fa + diff)
+        if is_bad_sympy_value(Fa):
+            Fa = sp.Integer(0)
+        if is_bad_sympy_value(Fb) and not is_bad_sympy_value(diff):
+            Fb = sp.simplify(Fa + diff)
+    else:
+        diff = sp.simplify(Fb - Fa)
+        if is_bad_sympy_value(diff):
+            try:
+                diff = strip_hyperbolic_expr(sp.simplify(sp.integrate(expanded, (var, a, b))))
+            except Exception:
+                pass
+
     steps.append(step(
         "Plug in the upper bound",
         f"\\[F\\!\\left({frac_latex(b)}\\right) = {nice_latex(Fb)}\\]",
@@ -447,7 +609,14 @@ def full_definite_eval_steps(
     ))
 
     total = sp.simplify(scale * diff) if not isinstance(scale, str) else None
-    if scale != 1 and total is not None:
+    if total is not None and is_bad_sympy_value(total):
+        try:
+            total = strip_hyperbolic_expr(
+                sp.simplify(scale * sp.integrate(expanded, (var, a, b)))
+            )
+        except Exception:
+            pass
+    if scale != 1 and total is not None and not is_bad_sympy_value(total):
         steps.append(step(
             "Multiply by the constant factor outside the integral",
             f"\\[{label} = {scale_tex}\\cdot\\left({nice_latex(diff)}\\right) = {nice_latex(total)}\\]",
@@ -459,6 +628,14 @@ def full_definite_eval_steps(
         ))
 
     final = total if total is not None else diff
+    if is_bad_sympy_value(final):
+        try:
+            core = sp.integrate(expanded, (var, a, b))
+            final = strip_hyperbolic_expr(
+                sp.simplify(scale * core if not isinstance(scale, str) else core)
+            )
+        except Exception:
+            pass
     unit_tex = f"\\text{{ {units}}}" if units else ""
     steps.append(step(
         "Final simplified value",
@@ -474,7 +651,7 @@ def _parts_tex(val) -> str:
     if isinstance(val, str):
         return val
     try:
-        return sp.latex(val)
+        return sympy_latex(val)
     except Exception:
         return str(val)
 
@@ -598,7 +775,12 @@ def steps_indefinite(expr, var=x):
     expanded = sp.expand(expr)
     f_tex = expr_latex(expr, var)
     integ = expr_latex(expanded, var)
-    F = sp.integrate(expanded, var)
+    F = strip_hyperbolic_expr(sp.integrate(expanded, var))
+    if isinstance(F, sp.Piecewise):
+        try:
+            F = strip_hyperbolic_expr(sp.simplify(F.args[0][0]))
+        except Exception:
+            pass
     anti = answer_latex(F, True, var)
     anti_no_c = answer_latex(F, False, var)
     terms = list(sp.Add.make_args(expanded))
@@ -637,7 +819,7 @@ def steps_indefinite(expr, var=x):
         ))
         term_lines = []
         for t in terms:
-            Ft = sp.integrate(t, var)
+            Ft = strip_hyperbolic_expr(sp.integrate(t, var))
             term_lines.append(
                 f"\\[\\int {expr_latex(t, var)}\\,d{v} = {answer_latex(Ft, False, var)}\\]"
             )
@@ -1544,7 +1726,13 @@ def poly_spec(expr, var=x, x0=0.0, x1=2.0):
 
 
 def make_indefinite(expr, source, title="Antiderivative", difficulty="easy", topic="fundamentals", var=x):
-    F = sp.integrate(expr, var)
+    F = strip_hyperbolic_expr(sp.integrate(expr, var))
+    # Prefer a single real branch over piecewise complex/hyperbolic forms
+    if isinstance(F, sp.Piecewise):
+        try:
+            F = strip_hyperbolic_expr(sp.simplify(F.args[0][0] if F.args else F))
+        except Exception:
+            pass
     v = str(var)
     integ = expr_latex(expr, var)
     anti = answer_latex(F, True, var)
@@ -2250,12 +2438,31 @@ LONG_CHOICE_CHARS = 52
 
 
 def split_labeled_answer(answer: str) -> tuple[str, str]:
-    """Split 'L = <expr>' into ('L = ', '<expr>'). Prefix may be empty."""
+    """Split 'L = <expr>' into ('L = ', '<expr>'). Prefix may be empty.
+
+    Must ignore '=' inside braces (e.g. I_{y=-1} = 86) — only split on a
+    top-level equals sign.
+    """
     s = str(answer).strip()
-    m = re.match(r"^([A-Za-z\\{}_^0-9]+(?:_\{[^}]+\})?\s*=\s*)(.+)$", s, flags=re.DOTALL)
-    if m:
-        return m.group(1), m.group(2).strip()
-    return "", s
+    depth = 0
+    split_at = None
+    for i, ch in enumerate(s):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth = max(0, depth - 1)
+        elif ch == "=" and depth == 0:
+            split_at = i
+    if split_at is None:
+        return "", s
+    left = s[:split_at].rstrip()
+    right = s[split_at + 1 :].lstrip()
+    if not left or not right:
+        return "", s
+    # Require a label-like left side (starts with letter, backslash, or '(')
+    if not re.match(r"^[A-Za-z\\(\\bar]", left):
+        return "", s
+    return left + " = ", right
 
 
 def compact_math_latex(latex: str) -> str:
@@ -2263,9 +2470,6 @@ def compact_math_latex(latex: str) -> str:
     s = str(latex).strip()
     # Drop size matchers that bloat KaTeX width.
     s = s.replace("\\left", "").replace("\\right", "")
-    s = re.sub(r"\\operatorname\{asinh\}", r"\\sinh^{-1}", s)
-    s = re.sub(r"\\operatorname\{acosh\}", r"\\cosh^{-1}", s)
-    s = re.sub(r"\\operatorname\{atanh\}", r"\\tanh^{-1}", s)
     # Prefer ln in calc context; sympy emits \log.
     s = re.sub(r"\\log(?![a-zA-Z])", r"\\ln", s)
     # Sympy often emits f{(x)} after stripping \left/\right — normalize to f(x).
@@ -2333,6 +2537,17 @@ def _choice_unique(candidates: list[str], correct: str) -> list[str]:
     return out
 
 
+def _compute_value(compute: dict):
+    """Reuse compute['value'] when present to avoid re-integrating during MC build."""
+    if compute.get("value") is not None:
+        return sp.simplify(compute["value"])
+    var = compute.get("var", x)
+    expr = compute["expr"]
+    a, b = compute["a"], compute["b"]
+    scale = compute.get("scale", 1)
+    return sp.simplify(scale * sp.integrate(expr, (var, a, b)))
+
+
 def short_distractors_from_compute(compute: dict | None) -> list[str]:
     """Build short conceptual wrongs when the exact closed form is too long to wrap."""
     if not compute:
@@ -2342,17 +2557,23 @@ def short_distractors_from_compute(compute: dict | None) -> list[str]:
         expr = compute["expr"]
         a, b = compute["a"], compute["b"]
         scale = compute.get("scale", 1)
-        F = sp.simplify(sp.integrate(expr, var))
-        upper_only = sp.simplify(scale * F.subs(var, b))
-        lower_only = sp.simplify(scale * F.subs(var, a))
-        swapped = sp.simplify(scale * (F.subs(var, a) - F.subs(var, b)))
+        F = real_antiderivative(expr, var)
+        Fa = eval_antideriv_at(F, var, a, side="+")
+        Fb = eval_antideriv_at(F, var, b, side="-")
+        upper_only = sp.simplify(scale * Fb)
+        lower_only = sp.simplify(scale * Fa)
+        swapped = sp.simplify(scale * (Fa - Fb))
         span = sp.simplify(b - a)
-        doubled = sp.simplify(2 * scale * (F.subs(var, b) - F.subs(var, a)))
-        half = sp.simplify(scale * (F.subs(var, b) - F.subs(var, a)) / 2)
-        cands = []
+        val = _compute_value(compute)
+        doubled = sp.simplify(2 * val)
+        half = sp.simplify(val / 2)
         scored: list[tuple[int, str]] = []
-        for val in (span, upper_only, lower_only, half, doubled, swapped):
-            lx = latex_positive_first(val)
+        for term in (span, upper_only, lower_only, half, doubled, swapped):
+            if is_bad_sympy_value(term):
+                continue
+            lx = latex_positive_first(term)
+            if "NaN" in lx or "nan" in lx.lower():
+                continue
             # Prefer genuinely short distractors for the card grid.
             if lx and len(lx) <= LONG_CHOICE_CHARS + 24:
                 scored.append((len(lx), lx))
@@ -2368,12 +2589,7 @@ def choice_body_from_compute(compute: dict | None) -> str | None:
     if not compute:
         return None
     try:
-        var = compute.get("var", x)
-        expr = compute["expr"]
-        a, b = compute["a"], compute["b"]
-        scale = compute.get("scale", 1)
-        val = sp.simplify(scale * sp.integrate(expr, (var, a, b)))
-        body = latex_positive_first(val)
+        body = latex_positive_first(_compute_value(compute))
         return body or None
     except Exception:
         return None
@@ -2407,12 +2623,18 @@ def auto_mc_choices(answer: str, compute: dict | None = None) -> list[dict]:
             format_choice_latex(answer, f"2\\left({body}\\right)"),
             format_choice_latex(answer, f"\\frac{{{body}}}{{2}}"),
         ]
-        # Prefer a distinct third: strip π when present, else a mild shift label.
+        # Prefer a distinct third: drop a π factor cleanly (never leave "2 1").
         if "\\pi" in body:
-            stripped = body.replace("\\pi", "1")
-            stripped = re.sub(r"1\s*\\cdot\s*", "", stripped)
-            stripped = re.sub(r"\\cdot\s*1", "", stripped)
-            candidates.append(format_choice_latex(answer, stripped))
+            stripped = body
+            stripped = re.sub(r"\\cdot\s*\\pi", "", stripped)
+            stripped = re.sub(r"\\pi\s*\\cdot\s*", "", stripped)
+            stripped = re.sub(r"\\pi", "", stripped)
+            stripped = re.sub(r"\s{2,}", " ", stripped)
+            stripped = re.sub(r"\(\s*\)", "", stripped)
+            stripped = stripped.strip(" +·\\cdot")
+            stripped = re.sub(r"\{\s*\}", "", stripped).strip()
+            if stripped and stripped not in ("", body, correct):
+                candidates.append(format_choice_latex(answer, stripped))
         elif prefix and body != correct:
             candidates.append(body)
         candidates.append(format_choice_latex(answer, f"-\\left({body}\\right)"))
@@ -3374,7 +3596,7 @@ def catalog_arc_varied():
             setup = f"\\[L=\\int_{{{lo}}}^{{{sp.latex(hi)}}}\\sqrt{{1+\\frac{{1}}{{x^2}}}}\\,dx\\]"
             top = {"t": "log", "a": 1}
             x0, x1 = float(lo), float(sp.N(hi))
-            compute = {"f": f, "expr": integrand, "a": lo, "b": hi, "label": "L"}
+            compute = {"f": f, "expr": integrand, "a": lo, "b": hi, "label": "L", "value": L}
         elif case == 5:
             # y = e^{x/a} or e^x
             a = 1 + tier
@@ -3386,17 +3608,26 @@ def catalog_arc_varied():
             setup = f"\\[L=\\int_0^{{{sp.latex(n)}}}\\sqrt{{1+\\frac{{1}}{{{a * a}}}e^{{2x/{a}}}}}\\,dx\\]"
             top = {"t": "exp", "s": 1, "a": 1 / a}
             x0, x1 = 0.0, float(sp.N(n))
-            compute = {"f": f, "expr": integrand, "a": 0, "b": n, "label": "L"}
+            compute = {"f": f, "expr": integrand, "a": 0, "b": n, "label": "L", "value": L}
         elif case == 6:
-            # Catenary y = a cosh(x/a)
-            a = 1 + tier + rep
-            n = a  # [0, a]
-            f = a * sp.cosh(x / a)
-            integrand = sp.cosh(x / a)  # √(1+sinh^2)=cosh
+            # Shifted power curve: y=(2/3)(x+1)^{3/2} → √(1+(y')²)=√(x+2) (no hyperbolics)
+            k = 1 + tier + rep
+            n = 1 + tier + rep
+            f = sp.Rational(2 * k, 3) * (x + 1) ** sp.Rational(3, 2)
+            integrand = sp.sqrt(k * k * (x + 1) + 1)
+            # For k=1: y'=(x+1)^{1/2}, √(1+y'²)=√(x+2)
+            if k == 1:
+                integrand = sp.sqrt(x + 2)
+            else:
+                # y = (2k/3)(x+1)^{3/2}, y' = k√(x+1), √(1+k²(x+1))
+                integrand = sp.sqrt(1 + k * k * (x + 1))
             L = sp.simplify(sp.integrate(integrand, (x, 0, n)))
-            prompt = f"Find the arc length of the catenary \\(y={a}\\cosh(x/{a})\\) on \\([0,{n}]\\)."
-            setup = f"Since \\(y'=\\sinh(x/{a})\\) and \\(1+\\sinh^2=\\cosh^2\\): \\[L=\\int_0^{{{n}}}\\cosh\\frac{{x}}{{{a}}}\\,dx\\]"
-            top = {"t": "cosh", "a": a}
+            prompt = (
+                f"Find the arc length of "
+                f"\\(y=\\dfrac{{{2 * k}}}{{3}}(x+1)^{{3/2}}\\) on \\([0,{n}]\\)."
+            )
+            setup = f"\\[L=\\int_0^{{{n}}}\\sqrt{{1+{k * k}(x+1)}}\\,dx\\]"
+            top = {"t": "pow-shift", "a": 2 * k / 3, "b": 1, "n": 1.5}
             x0, x1 = 0, n
             compute = {"f": f, "expr": integrand, "a": 0, "b": n, "label": "L"}
         elif case == 7:
@@ -3608,18 +3839,37 @@ def catalog_surface_varied():
             top = {"t": "pow-shift", "a": 2 * k / 3, "b": c, "n": 1.5}
             compute = {"f": f, "expr": integrand, "a": 0, "b": n, "label": "S", "scale": 2 * sp.pi}
         else:
-            # Catenary surface (hard classic)
-            a = 1 + tier + rep
-            hi = a
-            f = a * sp.cosh(x / a)
-            # √(1+(y')^2)=cosh(x/a); S=2π∫ a cosh^2(x/a) dx
-            integrand = f * sp.cosh(x / a)
-            S = 2 * sp.pi * sp.integrate(integrand, (x, 0, hi))
-            prompt = f"Find the surface area when the catenary \\(y={a}\\cosh(x/{a})\\) on \\([0,{hi}]\\) is revolved about the \\(x\\)-axis."
-            setup = f"\\[S=2\\pi\\int_0^{{{hi}}}{a}\\cosh\\frac{{x}}{{{a}}}\\cdot\\cosh\\frac{{x}}{{{a}}}\\,dx\\]"
-            top = {"t": "cosh", "a": a}
+            # y = √(c - x) about x-axis — slant simplifies to elementary √(linear)
+            c = 3 + tier + rep
+            lo = 0
+            hi = 1 + tier + rep
+            f = sp.sqrt(c - x)
+            # y' = -1/(2√(c-x)); √(1+(y')²)=√(4(c-x)+1)/(2√(c-x))
+            # S = 2π ∫ y √(1+(y')²) dx = π ∫ √(4c-4x+1) dx
+            integrand = sp.sqrt(4 * c - 4 * x + 1) / 2  # so scale 2π * integrand = π√(...)
+            S = 2 * sp.pi * sp.integrate(integrand, (x, lo, hi))
+            prompt = (
+                f"Find the surface area when \\(y=\\sqrt{{{c}-x}}\\) on "
+                f"\\([{lo},{hi}]\\) is revolved about the \\(x\\)-axis."
+            )
+            setup = (
+                f"Simplify the slant factor first: "
+                f"\\[S=2\\pi\\int_{{{lo}}}^{{{hi}}}\\sqrt{{{c}-x}}"
+                f"\\cdot\\frac{{\\sqrt{{4({c}-x)+1}}}}{{2\\sqrt{{{c}-x}}}}\\,dx"
+                f"=\\pi\\int_{{{lo}}}^{{{hi}}}\\sqrt{{{4 * c + 1}-4x}}\\,dx\\]"
+            )
+            top = {"t": "sqrt", "a": 1}  # visual approx of √(c-x)
             n = hi
-            compute = {"f": f, "expr": integrand, "a": 0, "b": hi, "label": "S", "scale": 2 * sp.pi}
+            compute = {
+                "f": f,
+                "expr": integrand,
+                "a": lo,
+                "b": hi,
+                "label": "S",
+                "scale": 2 * sp.pi,
+                "setup_display": setup,
+                "display_integrand": f"\\frac{{1}}{{2}}\\sqrt{{{4 * c + 1}-4x}}",
+            }
         x_min = locals().get("x_min", 0.0)
         vp = {
             "method": "surface-x",
@@ -4192,6 +4442,16 @@ _DOUBLE_INT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Strict rule: no hyperbolic functions (sinh, cosh, asinh, …) in any problem text.
+_HYPERBOLIC_TEXT_RE = re.compile(
+    r"hyperbolic"
+    r"|\\sinh|\\cosh|\\tanh|\\coth|\\sech|\\csch"
+    r"|\\operatorname\{a?(?:sinh|cosh|tanh|coth|sech|csch)\}"
+    r"|(?<![A-Za-z])a?(?:sinh|cosh|tanh|coth|sech|csch)(?![A-Za-z])"
+    r'|"t"\s*:\s*"cosh"|"t"\s*:\s*"sinh"',
+    re.IGNORECASE,
+)
+
 
 def _collect_strings(obj, out: list[str]) -> None:
     if isinstance(obj, str):
@@ -4204,12 +4464,23 @@ def _collect_strings(obj, out: list[str]) -> None:
             _collect_strings(v, out)
 
 
-def uses_double_integral(problem) -> str | None:
-    """Return a short reason if the problem uses double integration; else None."""
+def problem_text_blob(problem) -> str:
     parts: list[str] = []
     _collect_strings(problem, parts)
-    blob = "\n".join(parts)
-    m = _DOUBLE_INT_RE.search(blob)
+    return "\n".join(parts)
+
+
+def uses_double_integral(problem) -> str | None:
+    """Return a short reason if the problem uses double integration; else None."""
+    m = _DOUBLE_INT_RE.search(problem_text_blob(problem))
+    if m:
+        return m.group(0)
+    return None
+
+
+def uses_hyperbolic(problem) -> str | None:
+    """Return a short reason if the problem uses hyperbolic functions; else None."""
+    m = _HYPERBOLIC_TEXT_RE.search(problem_text_blob(problem))
     if m:
         return m.group(0)
     return None
@@ -4244,6 +4515,12 @@ def build_bank():
                     f"{topic}[{idx}] uses double integration ({hit!r}): "
                     f"{(p.get('source') or p.get('prompt') or '')[:120]}"
                 )
+            hit = uses_hyperbolic(p)
+            if hit:
+                raise SystemExit(
+                    f"{topic}[{idx}] uses hyperbolic function ({hit!r}): "
+                    f"{(p.get('source') or p.get('prompt') or '')[:120]}"
+                )
         if counts.get("easy") != DIFFICULTY_EASY or counts.get("medium") != DIFFICULTY_MEDIUM or counts.get("hard") != DIFFICULTY_HARD:
             raise SystemExit(
                 f"{topic}: difficulty mix {counts}, need "
@@ -4264,6 +4541,8 @@ def _json_safe(obj):
         return {k: _json_safe(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
         return [_json_safe(v) for v in obj]
+    if isinstance(obj, Fraction):
+        return float(obj)
     if isinstance(obj, sp.Basic):
         if obj.is_number:
             try:
@@ -4273,6 +4552,12 @@ def _json_safe(obj):
         return str(obj)
     if isinstance(obj, (sp.Rational, sp.Integer, sp.Float)):
         return float(obj)
+    # numpy / plain rationals that sometimes leak into visualParams
+    if type(obj).__name__ == "Rational":
+        try:
+            return float(obj)
+        except Exception:
+            return str(obj)
     return obj
 
 

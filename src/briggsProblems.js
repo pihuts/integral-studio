@@ -4,35 +4,36 @@ import { GENERATED_BANK, QUESTIONS_PER_TOPIC } from "./generatedBank.js";
 const BANK = GENERATED_BANK;
 
 /**
- * Strict rule: no problem may use double (or higher) integration.
- * Scan the whole problem (prompt, steps, equations, choices, …).
+ * Strict Calc-1/2 bans — scan the whole problem (prompt, steps, equations, …).
  *
- * Detects:
- *  - prose "double integral"
- *  - \iint / \iiint
- *  - iterated \int…\int (only limits between signs)
- *  - product measures \,dy\,dx / \,dx\,dy
+ * Double integration:
+ *  - prose "double integral", \iint/\iiint, iterated \int…\int, \,dy\,dx
+ *  - does NOT flag sums of separate single integrals (A=∫…+∫…)
  *
- * Does NOT flag sums of separate single integrals
- * (e.g. A=∫…dx+∫…dx) — those keep a non-integral token between signs.
+ * Hyperbolic functions:
+ *  - sinh/cosh/tanh/… and inverses (asinh, \sinh^{-1}, …)
  */
-function requiresDoubleIntegral(problem) {
+function isBannedProblem(problem) {
   const text = JSON.stringify(problem ?? {});
   if (/double\s+integral/i.test(text)) return true;
   if (/\\iiint|\\iint|\\iiiint/.test(text)) return true;
   if (/\\int\s*\\int/.test(text)) return true;
   if (/\\,d[xy]\\,d[xy]/.test(text)) return true;
-  // Iterated: \int_(...) ^(...) \int with only limit tokens between
   if (/\\int(?:_(?:\{[^}]*\}|[^\s\\^])|\\?\^(?:\{[^}]*\}|[^\s\\_]))+\\int/.test(text)) {
     return true;
   }
+  if (/hyperbolic/i.test(text)) return true;
+  if (/\\sinh|\\cosh|\\tanh|\\coth|\\sech|\\csch/.test(text)) return true;
+  if (/\\operatorname\{a?(?:sinh|cosh|tanh|coth|sech|csch)\}/.test(text)) return true;
+  if (/(?<![A-Za-z])a?(?:sinh|cosh|tanh|coth|sech|csch)(?![A-Za-z])/i.test(text)) return true;
+  if (/"t"\s*:\s*"(?:cosh|sinh)"/.test(text)) return true;
   return false;
 }
 
 function dedupePool(items) {
   const seen = new Set();
   const pool = [];
-  for (const item of items.filter((problem) => !requiresDoubleIntegral(problem))) {
+  for (const item of items.filter((problem) => !isBannedProblem(problem))) {
     const key = `${item.source || ""}|${item.prompt || ""}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -101,7 +102,7 @@ const CONCEPT_TITLES = {
     4: "Arc length of a circular arc",
     5: "Arc length of y = ln x",
     6: "Arc length of an exponential",
-    7: "Arc length of a catenary",
+    7: "Arc length of a shifted power curve",
     8: "Arc length of a classic special curve",
     9: "Polyline arc length",
     10: "Arc length of y = √x",
@@ -116,7 +117,7 @@ const CONCEPT_TITLES = {
     7: "Surface about a parallel line",
     8: "Surface of a parabola",
     9: "Surface of a shifted power curve",
-    10: "Surface of a catenary",
+    10: "Surface of y = √(c − x)",
   },
   inertia: {
     1: "I_x of a rectangle",
