@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Local env / secrets
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+.idea/
+.vscode/
+*.code-workspace
+
+# Logs & caches
+*.log
+npm-debug.log*
+.cache/
+.vite/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Agent / local tooling artifacts
+agent-tools/
+terminals/
+mcps/
+.claude/
+.serena/
+
+# Optional local PDF hard-link setup leftovers
+public/references/*.pdf
+!public/references/.gitkeep
