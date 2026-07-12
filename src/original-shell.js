@@ -1877,7 +1877,7 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
     }
 
     // The renderer and its materials stay unchanged; only this configuration is
-    // supplied by the active question in Integral Studio.
+    // supplied by the active question in CEE 103.
     if (query.get("example") === "dynamic") {
       const specFromUrl = decodeConfigParam(query.get("config"));
       if (!applyDynamicSpec(specFromUrl)) {
@@ -2516,7 +2516,7 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
     }
 
     window.addEventListener("message", event => {
-      // Only accept control messages from same-origin parents (Integral Studio shell).
+      // Only accept control messages from same-origin parents (CEE 103 shell).
       if (event.origin !== window.location.origin) return;
       const data = event.data;
       if (!data || data.type !== "integral-studio") return;

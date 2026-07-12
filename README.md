@@ -1,4 +1,4 @@
-# Integral Studio
+# CEE 103
 
 Self-paced calculus practice with a live 3D visual.
 

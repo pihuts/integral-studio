@@ -969,7 +969,7 @@ function renderLanding() {
       <header class="landing-top">
         <div class="brand landing-brand">
           <span class="brand-mark" aria-hidden="true">∫</span>
-          <span>Integral Studio</span>
+          <span>CEE 103</span>
         </div>
       </header>
       <main class="landing-main">
@@ -1016,7 +1016,7 @@ function renderPractice(options = {}) {
     <header class="topbar">
       <button type="button" class="brand brand-button" id="go-home" aria-label="Back to topics">
         <span class="brand-mark" aria-hidden="true">∫</span>
-        <span>Integral Studio</span>
+        <span>CEE 103</span>
       </button>
       <div class="topbar-meta">
         <span class="topbar-topic">${topic.label}</span>
