@@ -1048,8 +1048,8 @@ function renderPractice(options = {}) {
             <div class="model-controls">
               ${problemHasDualMethod(p) ? `
                 <div class="segmented" role="group" aria-label="Slice direction">
-                  <button type="button" class="${!state.alternate ? "selected" : ""}" data-method="shells" aria-pressed="${!state.alternate}">Vertical strips</button>
-                  <button type="button" class="${state.alternate ? "selected" : ""}" data-method="washers" aria-pressed="${state.alternate}">Horizontal strips</button>
+                  <button type="button" class="${!state.alternate ? "selected" : ""}" data-method="shells" aria-pressed="${!state.alternate}" aria-label="Vertical strips">Vertical<span class="label-rest"> strips</span></button>
+                  <button type="button" class="${state.alternate ? "selected" : ""}" data-method="washers" aria-pressed="${state.alternate}" aria-label="Horizontal strips">Horizontal<span class="label-rest"> strips</span></button>
                 </div>
               ` : ""}
               <div class="control-grid">
