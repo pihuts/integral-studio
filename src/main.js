@@ -45,7 +45,7 @@ const state = {
   showSolution: false,
   method: "shells",
   slices: 16,
-  playbackSpeed: 1,
+  playbackSpeed: 3,
   playbackProgress: 0,
   playing: true,
   alternate: false,
@@ -612,40 +612,18 @@ function renderPractice(options = {}) {
                 <button type="button" id="viz-retry" class="secondary control-btn">Try again</button>
               </div>
             </div>
+            ${
+              problemHasDualMethod(p)
+                ? `
             <div class="model-controls">
-              ${
-                problemHasDualMethod(p)
-                  ? `
                 <div class="segmented" role="group" aria-label="Slice direction">
                   <button type="button" class="${!state.alternate ? "selected" : ""}" data-method="shells" aria-pressed="${!state.alternate}" aria-label="Vertical strips">Vertical<span class="label-rest"> strips</span></button>
                   <button type="button" class="${state.alternate ? "selected" : ""}" data-method="washers" aria-pressed="${state.alternate}" aria-label="Horizontal strips">Horizontal<span class="label-rest"> strips</span></button>
                 </div>
-              `
-                  : ""
-              }
-              <div class="control-grid">
-                <label class="control-field">
-                  <span class="control-label">Strips</span>
-                  <input id="slices" type="range" min="4" max="${maxStrips()}" value="${Math.min(state.slices, maxStrips())}" aria-valuetext="${Math.min(state.slices, maxStrips())} strips">
-                  <output id="slices-out" for="slices">${Math.min(state.slices, maxStrips())}</output>
-                </label>
-                <label class="control-field">
-                  <span class="control-label">Speed</span>
-                  <input id="playback-speed" type="range" min="0.25" max="3" step="0.05" value="${state.playbackSpeed}" aria-valuetext="${Number(state.playbackSpeed).toFixed(2)} times speed">
-                  <output id="speed-out" for="playback-speed">${Number(state.playbackSpeed).toFixed(2)}×</output>
-                </label>
-                <label class="control-field control-field-wide">
-                  <span class="control-label">Progress</span>
-                  <input id="playback-progress" type="range" min="0" max="1" step="0.001" value="${state.playbackProgress}" aria-valuetext="${Math.round(state.playbackProgress * 100)} percent">
-                  <output id="progress-out" for="playback-progress">${Math.round(state.playbackProgress * 100)}%</output>
-                </label>
-                <div class="control-actions">
-                  <button type="button" id="play-toggle" class="secondary control-btn" aria-pressed="${state.playing}" aria-label="${state.playing ? "Pause animation" : "Play animation"}">${state.playing ? "Pause" : "Play"}</button>
-                  <button type="button" id="reset-playback" class="text-button">Restart</button>
-                  <button type="button" id="reset-view" class="text-button">Reset view</button>
-                </div>
-              </div>
             </div>
+              `
+                : ""
+            }
           </section>
           <section class="problem-panel" aria-labelledby="question-title">
             <div class="question-top">

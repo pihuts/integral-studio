@@ -10,7 +10,8 @@ import {
   buildSceneUrl
 } from "./sceneProtocol.js";
 
-const LOAD_TIMEOUT_MS = 8000;
+/** First load pulls Three.js through Vite; cold starts often exceed 8s. */
+const LOAD_TIMEOUT_MS = 30000;
 
 /**
  * @param {object} options
@@ -27,6 +28,7 @@ export function createSceneController(options = {}) {
   let loadTimer = null;
   let disposed = false;
   let loadTimedOut = false;
+  let sceneReady = false;
 
   function post(payload) {
     if (!frame?.contentWindow) return;
@@ -39,6 +41,26 @@ export function createSceneController(options = {}) {
       window.clearTimeout(loadTimer);
       loadTimer = null;
     }
+  }
+
+  function armLoadTimer() {
+    clearLoadTimer();
+    loadTimer = window.setTimeout(() => {
+      if (disposed || sceneReady) return;
+      loadTimedOut = true;
+      options.onError?.(
+        "Visualization took too long to load. Check your connection and try again."
+      );
+    }, LOAD_TIMEOUT_MS);
+  }
+
+  function markReady() {
+    // Accept late ready after a timeout so a slow first paint recovers instead of
+    // leaving the error overlay up while the iframe is actually fine.
+    clearLoadTimer();
+    loadTimedOut = false;
+    sceneReady = true;
+    options.onReady?.();
   }
 
   function dispose() {
@@ -60,10 +82,7 @@ export function createSceneController(options = {}) {
     if (!isSceneMessage(event.data)) return;
     const data = event.data;
     if (data.action === "ready" || data.action === "progress" || data.action === "step") {
-      if (!loadTimedOut) {
-        clearLoadTimer();
-        options.onReady?.();
-      }
+      markReady();
     }
     if (data.action === "error") {
       clearLoadTimer();
@@ -89,6 +108,9 @@ export function createSceneController(options = {}) {
 
   function onLoad() {
     if (disposed) return;
+    // Document (and modules) loaded. If the scene has not signaled yet, keep waiting
+    // from this point; do not re-arm after a successful ready.
+    if (!sceneReady && !loadTimedOut) armLoadTimer();
     const palette = options.getPalette?.();
     if (palette) post({ action: "setPalette", palette });
     // Config was in URL; re-send only if caller supplies a live spec via lastMountSpec
@@ -112,6 +134,7 @@ export function createSceneController(options = {}) {
     dispose();
     disposed = false;
     loadTimedOut = false;
+    sceneReady = false;
     if (!hostEl) return null;
 
     const {
@@ -155,14 +178,7 @@ export function createSceneController(options = {}) {
     hostEl.append(iframe);
     frame = iframe;
 
-    loadTimer = window.setTimeout(() => {
-      if (!disposed) {
-        loadTimedOut = true;
-        options.onError?.(
-          "Visualization took too long to load. Check your connection and try again."
-        );
-      }
-    }, LOAD_TIMEOUT_MS);
+    armLoadTimer();
 
     iframe.addEventListener("load", onLoad);
     iframe.addEventListener("error", onFrameError);
