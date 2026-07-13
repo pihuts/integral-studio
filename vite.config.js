@@ -10,11 +10,11 @@ const securityHeaders = {
   // KaTeX injects inline styles; Google Fonts for typography.
   "Content-Security-Policy": [
     "default-src 'self'",
-    "script-src 'self'",
+    "script-src 'self' http://localhost:8400",
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "font-src 'self' https://fonts.gstatic.com data:",
     "img-src 'self' data: blob:",
-    "connect-src 'self'",
+    "connect-src 'self' http://localhost:8400",
     "frame-src 'self'",
     "worker-src 'self' blob:",
     "base-uri 'self'",

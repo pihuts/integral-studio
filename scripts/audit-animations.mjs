@@ -6,6 +6,7 @@
 import { getBriggsProblem, briggsProblemCount } from "../src/briggsProblems.js";
 import { VISUAL_BY_SOURCE, VISUAL_BY_KEY } from "../src/briggsVisualSpecs.js";
 import { buildExampleFromSpec, compileCurve, SUPPORTED_CURVE_TYPES, SUPPORTED_RENDER_METHODS } from "../src/visualSpecs.js";
+import { materializeVisualExample } from "../src/materializeVisual.js";
 import { loadBriggsBank } from "../src/briggsProblems.js";
 
 await loadBriggsBank();

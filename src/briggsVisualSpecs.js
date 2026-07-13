@@ -1494,6 +1494,14 @@ function repairGeneratedVisualSpec(problem) {
   }
 }
 
+/**
+ * Attach / repair visualSpec on a problem (mutates).
+ * Prefer calling materializeVisualExample from materializeVisual.js at app seams;
+ * this stays the internal adapter for maps + generator compatibility repair.
+ *
+ * Repair is intentionally a shrinking layer: when the bank generator emits complete
+ * visualParams, these regex patches should no-op.
+ */
 export function attachVisualSpec(problem) {
   if (problem.visualKey && VISUAL_BY_KEY[problem.visualKey]) {
     problem.visualSpec = structuredClone(VISUAL_BY_KEY[problem.visualKey]);
@@ -1502,6 +1510,7 @@ export function attachVisualSpec(problem) {
   } else if (problem.visualParams) {
     problem.visualSpec = inferVisualSpec(problem);
   }
+  // Compatibility only — generator-owned specs should not need this.
   repairGeneratedVisualSpec(problem);
   if (problem.visualSpec) {
     if (problem.dualMethod !== false) {

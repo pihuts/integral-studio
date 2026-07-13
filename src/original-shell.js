@@ -1,6 +1,15 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
+import { STEP_PROGRESS, phasesFromProgress, stepIdFromProgress } from './animationTimeline.js';
+import {
+  framePolicy,
+  methodFamily,
+  isAreaStripMethod,
+  pieceLabel,
+  PHASE
+} from './methodRenderers.js';
+import { SCENE_MESSAGE_TYPE, isSceneMessage, childEnvelope } from './sceneProtocol.js';
 
 
 
@@ -63,11 +72,9 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
     renderer.domElement.addEventListener("webglcontextlost", event => {
       event.preventDefault();
       if (window.parent && window.parent !== window) {
-        window.parent.postMessage({
-          type: "integral-studio",
-          action: "error",
+        window.parent.postMessage(childEnvelope("error", {
           message: "Graphics context was lost. Try reloading the visualization."
-        }, window.location.origin);
+        }), window.location.origin);
       }
     });
 
@@ -75,14 +82,14 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
     // Fog is retuned per-example in applyViewLimits so tall graphs stay sharp.
     scene.fog = new THREE.Fog(canvasColor, 18, 42);
 
-    const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
-    camera.position.set(4.8, 3.1, 5.4);
+    const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 100);
+    camera.position.set(3.2, 2.2, 4.0);
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
-    controls.target.set(0, 0.45, 0);
+    controls.target.set(0, 0.55, 0);
     controls.maxPolarAngle = Math.PI * 0.49;
-    controls.minDistance = 1.2;
+    controls.minDistance = 0.9;
     controls.maxDistance = 28;
     // Left + middle mouse drag orbit the camera; wheel zooms; right pans.
     controls.mouseButtons = {
@@ -96,7 +103,7 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
     };
 
     const root = new THREE.Group();
-    root.rotation.y = -0.42;
+    root.rotation.y = -0.28;
     scene.add(root);
 
     const exampleInput = document.getElementById("example");
@@ -141,8 +148,8 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
     /** Keep subject sharp: fog starts beyond the fitted camera distance. */
     function applyViewLimits(fitDistance) {
       const distance = Number.isFinite(fitDistance) && fitDistance > 0 ? fitDistance : 8;
-      controls.minDistance = clamp(distance * 0.22, 0.8, 6);
-      controls.maxDistance = clamp(distance * 3.2, 16, 80);
+      controls.minDistance = clamp(distance * 0.28, 0.7, 5);
+      controls.maxDistance = clamp(distance * 3.4, 14, 80);
       camera.near = clamp(distance * 0.02, 0.05, 0.5);
       camera.far = Math.max(100, distance * 10);
       camera.updateProjectionMatrix();
@@ -985,7 +992,14 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
       };
     }
 
+    /** True after the user orbits/zooms; cleared on setExample / resetView. */
+    let viewUserAdjusted = false;
+    controls.addEventListener("start", () => {
+      viewUserAdjusted = true;
+    });
+
     function fitCameraToExample(ex) {
+      if (!ex) return;
       const bounds = getSceneBounds(ex);
       const centerX = (bounds.xMin + bounds.xMax) / 2;
       const centerY = (bounds.yMin + bounds.yMax) / 2;
@@ -1002,34 +1016,76 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
         targetY = (targetY + yToWorld(ex.axisY)) / 2;
       }
 
-      const spanX = xToWorld(bounds.xMax) - xToWorld(bounds.xMin);
-      const spanY = yToWorld(bounds.yMax) - yToWorld(bounds.yMin);
+      const spanX = Math.max(0.01, xToWorld(bounds.xMax) - xToWorld(bounds.xMin));
+      const spanY = Math.max(0.01, yToWorld(bounds.yMax) - yToWorld(bounds.yMin));
       // Cross-section solids and solids of revolution both extend in ±z.
       let spanZ = 0;
-      if (ex.method === "cross-semicircle") {
+      const method = ex.method || "";
+      if (method === "cross-semicircle") {
         spanZ = yToWorld(Math.max(0, bounds.yMax - bounds.yMin) / 2);
-      } else if (ex.method === "cross-square") {
+      } else if (method === "cross-square") {
         spanZ = yToWorld(Math.max(0, bounds.yMax - bounds.yMin));
       } else if (
-        ex.method?.startsWith("disk") ||
-        ex.method?.startsWith("washer") ||
-        ex.method?.startsWith("shell") ||
-        ex.method?.startsWith("surface")
+        method.startsWith("disk") ||
+        method.startsWith("washer") ||
+        method.startsWith("shell") ||
+        method.startsWith("surface")
       ) {
         // Revolution radius is already folded into bounds; z-extent ≈ half the y (or x) span about the axis.
-        spanZ = Math.max(spanX, spanY) * 0.45;
+        spanZ = Math.max(spanX, spanY) * 0.5;
       }
-      const span = Math.max(spanX, spanY, spanZ, 1.4);
-      const distance = span * 2.15 + 1.8;
 
-      root.rotation.y = -0.42;
+      const isSolid =
+        method.startsWith("disk") ||
+        method.startsWith("washer") ||
+        method.startsWith("shell") ||
+        method.startsWith("surface") ||
+        method.startsWith("cross-");
+      const isPlanar =
+        method === "area" ||
+        method === "centroid" ||
+        method === "inertia" ||
+        method === "arc" ||
+        isAreaStripMethod(method);
+
+      // Face the subject: planar diagrams more front-on; solids a clear ¾ view of the volume.
+      if (isPlanar) {
+        root.rotation.y = -0.22;
+      } else if (method.startsWith("shell")) {
+        root.rotation.y = -0.58;
+      } else if (isSolid) {
+        root.rotation.y = -0.5;
+      } else {
+        root.rotation.y = -0.36;
+      }
+
       // Bias look target slightly toward +z so disks/semicircles aren't edge-on.
-      const targetZ = spanZ > 0 ? spanZ * 0.35 : 0;
+      const targetZ = spanZ > 0 ? spanZ * 0.22 : 0;
       controls.target.set(targetX, targetY, targetZ);
+
+      // FOV + aspect framing so the model fills the (often tall/narrow) panel.
+      const halfW = Math.max(spanX, spanZ * 1.6, 0.9) * 0.5;
+      const halfH = Math.max(spanY, spanZ * 0.9, 0.7) * 0.5;
+      const vFov = THREE.MathUtils.degToRad(camera.fov);
+      const aspect = Math.max(0.35, camera.aspect || 1);
+      const hFov = 2 * Math.atan(Math.tan(vFov / 2) * aspect);
+      const distH = halfH / Math.tan(vFov / 2);
+      const distW = halfW / Math.tan(hFov / 2);
+      // Tight pad: zoomed in on first paint; still room for orbit without clipping.
+      const pad = isSolid ? 1.18 : 1.12;
+      const distance = Math.max(distH, distW, 1.6) * pad;
+
+      // View direction (from target toward camera): elevated, slightly from +x/+z.
+      const dir = isPlanar
+        ? new THREE.Vector3(0.42, 0.38, 1).normalize()
+        : isSolid
+          ? new THREE.Vector3(0.82, 0.4, 0.68).normalize()
+          : new THREE.Vector3(0.62, 0.44, 0.78).normalize();
+
       camera.position.set(
-        targetX + distance * 0.72,
-        targetY + distance * 0.52,
-        distance * 0.82 + targetZ
+        targetX + dir.x * distance,
+        targetY + dir.y * distance,
+        targetZ + dir.z * distance
       );
       applyViewLimits(distance);
       controls.update();
@@ -1404,10 +1460,6 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
         group.add(pt);
       }
       return group;
-    }
-
-    function isAreaStripMethod(method) {
-      return method === "area" || method === "centroid" || method === "inertia";
     }
 
     function makeArcApproximation(ex, count, reveal) {
@@ -2042,7 +2094,8 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
 
     function postToParent(payload) {
       if (window.parent && window.parent !== window) {
-        window.parent.postMessage({ type: "integral-studio", ...payload }, window.location.origin);
+        const { action, ...rest } = payload;
+        window.parent.postMessage(childEnvelope(action, rest), window.location.origin);
       }
     }
 
@@ -2086,6 +2139,7 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
       const wasPlaying = playing;
       lastPostedStep = "";
       lastPostedProgress = -1;
+      viewUserAdjusted = false;
       activeExample = normalizeExample(examples[key]);
       // Scale math→world BEFORE any geometry or camera work so tall domains fit.
       configureWorldScale(activeExample);
@@ -2099,25 +2153,7 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
       const isCrossSection = activeExample.method.startsWith("cross-");
       const isAreaLike = isAreaStripMethod(activeExample.method);
       const hasCutout = Boolean(activeExample.cutout);
-      const piece = isShell
-        ? "shell"
-        : activeExample.method.startsWith("disk")
-          ? "disk"
-          : activeExample.method === "arc"
-            ? "hypotenuse segment"
-            : activeExample.method === "surface-x" || activeExample.method === "surface-y"
-              ? "surface band"
-              : activeExample.method === "pump-bowl"
-                ? "water slice"
-                : activeExample.method === "pool-fill"
-                  ? "water slice"
-                : activeExample.method === "goat-barn"
-                  ? "sector"
-                : isCrossSection
-                  ? "cross-section"
-                : isAreaLike
-                  ? "strip"
-              : "washer";
+      const piece = pieceLabel(activeExample.method);
       const sliceDirection = activeExample.orientation === "vertical" ? "vertical" : "horizontal";
       if (isAreaLike) {
         stepRegionText.textContent =
@@ -2295,10 +2331,8 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
         : interval.min + (interval.max - interval.min) * 0.56;
       const sampleWidth = interval.width;
 
-      const slicePhase = Math.min(1, Math.max(0, progress / 0.28));
-      const rotatePhase = Math.min(1, Math.max(0, (progress - 0.24) / 0.42));
-      const stackPhase = Math.min(1, Math.max(0, (progress - 0.72) / 0.28));
-      const shellAngle = 0.02 + rotatePhase * Math.PI * 2;
+      const policy = framePolicy(ex.method, progress);
+      const { slicePhase, rotatePhase, stackPhase, shellAngle, family } = policy;
 
       if (ex.method === "pump-bowl") {
         const remainingTop = interval.max - (interval.max - interval.min) * stackPhase;
@@ -2312,18 +2346,19 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
         }
       }
 
-      if (ex.method === "goat-barn") {
-        const stage = progress < 0.43 ? 1 : progress < 0.72 ? 2 : 3;
+      // Method-family early adapters (goat / pool own their full frame).
+      if (family === "goat-barn") {
+        const stage = progress < STEP_PROGRESS.rotate ? 1 : progress < STEP_PROGRESS.stack ? 2 : 3;
         const goatKey = `${exampleInput.value}:${stage}:${Math.floor(progress * 50)}`;
-      if (goatKey !== lastCompletedKey) {
-        clearGroup(sliceGroup);
-        clearGroup(shellGroup);
-        clearGroup(completedShells);
-        completedShells.add(makeGoatGrazing(progress));
-        shellGroup.add(makeGoatActor(progress));
-        lastCompletedKey = goatKey;
-      }
-        setActiveStep(progress < 0.24 ? "region" : progress < 0.43 ? "slice" : progress < 0.72 ? "rotate" : "stack");
+        if (goatKey !== lastCompletedKey) {
+          clearGroup(sliceGroup);
+          clearGroup(shellGroup);
+          clearGroup(completedShells);
+          completedShells.add(makeGoatGrazing(progress));
+          shellGroup.add(makeGoatActor(progress));
+          lastCompletedKey = goatKey;
+        }
+        setActiveStep(policy.stepId);
         xReadout.textContent = String(stage);
         const area = stage === 1 ? 75 * Math.PI : stage === 2 ? 79 * Math.PI : 88 * Math.PI;
         hReadout.textContent = area.toFixed(1);
@@ -2331,7 +2366,7 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
         return;
       }
 
-      if (ex.method === "pool-fill") {
+      if (family === "pool-fill") {
         const poolKey = `${exampleInput.value}:${shellCount}:${stackPhase.toFixed(2)}:${progress < 0.70 ? rotatePhase.toFixed(2) : "done"}`;
         if (poolKey !== lastCompletedKey) {
           clearGroup(sliceGroup);
@@ -2340,7 +2375,7 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
           if (progress < 0.58) {
             sliceGroup.add(makePoolSample(sampleValue, sampleWidth * (0.2 + slicePhase * 0.8)));
           }
-          if (progress >= 0.20 && progress < 0.70) {
+          if (progress >= PHASE.midShellStart && progress < PHASE.midShellEnd) {
             shellGroup.add(makePoolSample(sampleValue, sampleWidth * (0.4 + rotatePhase * 0.6)));
           }
           if (progress >= 0.68) {
@@ -2348,10 +2383,7 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
           }
           lastCompletedKey = poolKey;
         }
-        if (progress < 0.24) setActiveStep("region");
-        else if (progress < 0.43) setActiveStep("slice");
-        else if (progress < 0.72) setActiveStep("rotate");
-        else setActiveStep("stack");
+        setActiveStep(policy.stepId);
         const currentX = 20 * clamp01(stackPhase || 0.56);
         const dx = 20 / shellCount;
         const depth = poolDepth(currentX);
@@ -2362,15 +2394,15 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
         return;
       }
 
-      const sliceKey = progress < 0.52 && ex.method !== "arc"
+      const sliceKey = policy.showSlice
         ? `${exampleInput.value}:${sampleValue.toFixed(3)}:${sampleWidth.toFixed(3)}:${slicePhase.toFixed(2)}:${rotatePhase.toFixed(2)}`
         : "none";
       if (sliceKey !== lastSliceKey) {
         clearGroup(sliceGroup);
-        if (ex.method === "pump-bowl" && progress < 0.52) {
+        if (ex.method === "pump-bowl" && progress < PHASE.sampleHide) {
           const y = sampleValue;
           sliceGroup.add(makeWaterDisk(y, sampleWidth * 0.82, materials.water));
-        } else if (progress < 0.52 && ex.method !== "arc") {
+        } else if (policy.showSlice) {
           slice = makeSlice(ex, sampleValue, sampleWidth * 0.82);
           slice.position.z = 0.014 + rotatePhase * 0.025;
           slice.scale.y = ex.orientation === "vertical" ? 0.08 + slicePhase * 0.92 : 1;
@@ -2381,27 +2413,29 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
       }
 
       const shellAngleStep = Math.floor(shellAngle / (Math.PI / 18));
-      const shellKey = progress >= 0.20 && progress < 0.70
+      const shellKey = policy.showRotateSample
         ? `${exampleInput.value}:${sampleValue.toFixed(3)}:${sampleWidth.toFixed(3)}:${shellAngleStep}`
         : "none";
       if (shellKey !== lastShellKey) {
         clearGroup(shellGroup);
-        if (progress >= 0.20 && progress < 0.70) {
-          if (ex.method === "pump-bowl") {
+        if (policy.showRotateSample) {
+          // Dispatch by method family (geometry adapters stay local).
+          if (family === "pump-bowl") {
             shellGroup.add(makePumpSample(sampleValue, rotatePhase));
-          } else if (ex.method === "arc") {
+          } else if (family === "arc") {
             shellGroup.add(makeArcApproximation(ex, Math.max(3, Math.floor(shellCount * rotatePhase)), 1));
-          } else if (ex.method === "surface-x") {
-            shellGroup.add(makeSurfaceBand(ex, sampleValue - sampleWidth / 2, sampleValue + sampleWidth / 2, shellAngle, materials.shell));
-            shellGroup.add(makeCircumferenceRing(sampleValue, ex.top(sampleValue), materials.lineAmber, ex.axisY ?? 0));
-          } else if (ex.method === "surface-y") {
-            shellGroup.add(makeSurfaceBandY(ex, sampleValue - sampleWidth / 2, sampleValue + sampleWidth / 2, shellAngle, materials.shell));
-            shellGroup.add(makeCircumferenceRingY(ex, sampleValue, materials.lineAmber));
-          } else if (ex.method.startsWith("cross-")) {
+          } else if (family === "surface") {
+            if (ex.method === "surface-x") {
+              shellGroup.add(makeSurfaceBand(ex, sampleValue - sampleWidth / 2, sampleValue + sampleWidth / 2, shellAngle, materials.shell));
+              shellGroup.add(makeCircumferenceRing(sampleValue, ex.top(sampleValue), materials.lineAmber, ex.axisY ?? 0));
+            } else {
+              shellGroup.add(makeSurfaceBandY(ex, sampleValue - sampleWidth / 2, sampleValue + sampleWidth / 2, shellAngle, materials.shell));
+              shellGroup.add(makeCircumferenceRingY(ex, sampleValue, materials.lineAmber));
+            }
+          } else if (family === "cross") {
             shellGroup.add(makeCrossSection(ex, sampleValue, sampleWidth * 0.82, materials.shell, rotatePhase));
-          } else if (isAreaStripMethod(ex.method)) {
+          } else if (family === "area-strip") {
             shellGroup.add(makeSlice(ex, sampleValue, sampleWidth * 0.82, materials.shell));
-            // Centroid moment phase: draw lever arm from strip center to the y-axis (x=0).
             if (ex.method === "centroid" && ex.orientation === "vertical") {
               const vb = verticalBounds(ex, sampleValue);
               const midY = (vb.lower + vb.upper) / 2;
@@ -2412,12 +2446,12 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
               shellGroup.add(makePoint(sampleValue, midY, 0xbc9a62, 0.016));
             }
           } else {
-            const piece = ex.method.startsWith("shell")
+            const pieceMesh = family === "shell"
               ? makeShell(ex, sampleValue, shellAngle, materials.shell, sampleWidth * 0.82)
               : makeWasherOrDisk(ex, sampleValue, shellAngle, materials.shell, sampleWidth * 0.82);
-            shellGroup.add(piece);
+            shellGroup.add(pieceMesh);
           }
-          if (ex.method.startsWith("shell")) {
+          if (family === "shell") {
             shellGroup.add(makeShellRim(ex, sampleValue, shellAngle, materials.lineAmber));
           }
         }
@@ -2425,7 +2459,7 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
       }
 
       const shownCount = Math.floor(shellCount * stackPhase);
-      const completedKey = ex.method === "pump-bowl"
+      const completedKey = family === "pump-bowl"
         ? `${exampleInput.value}:${shellCount}:${stackPhase.toFixed(2)}`
         : `${exampleInput.value}:${shellCount}:${shownCount}`;
       if (completedKey !== lastCompletedKey) {
@@ -2434,20 +2468,19 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
       }
       const regionMesh = regionGroup.children.find(child => child.material === materials.region);
       if (regionMesh?.material) {
-        regionMesh.material.opacity = progress > 0.74 ? 0.2 : 0.55;
+        regionMesh.material.opacity = policy.regionOpacity;
       }
 
       // Composite cutout: bright at region stage, fade as strips accumulate.
       const cutoutGhost = regionGroup.children.find(child => child.name === "cutoutGhost");
       if (cutoutGhost) {
-        const ghostOpacity = progress < 0.28
+        const ghostOpacity = progress < PHASE.sliceEnd
           ? 1
-          : progress < 0.72
-            ? 1 - (progress - 0.28) / 0.44 * 0.55
+          : progress < STEP_PROGRESS.stack
+            ? 1 - (progress - PHASE.sliceEnd) / 0.44 * 0.55
             : 0.35;
         cutoutGhost.traverse(child => {
           if (child.material && "opacity" in child.material) {
-            // outline lines stay more visible than fill
             const isFill = child.isMesh && child.geometry?.type === "ShapeGeometry";
             child.material.transparent = true;
             child.material.opacity = isFill
@@ -2458,7 +2491,6 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
         cutoutGhost.visible = progress < 0.92;
       }
 
-      // Part markers (A1 keep / A2 remove): show early, fade once balance appears.
       const partMarkers = regionGroup.children.find(child => child.userData?.isPartMarkers);
       if (partMarkers) {
         const showParts = progress < 0.78;
@@ -2467,11 +2499,10 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
         partMarkers.scale.setScalar(Math.min(1, s));
       }
 
-      // Centroid marker: grow in during the balance/stack phase.
       const centroidMarker = regionGroup.children.find(child => child.userData?.isCentroidMarker);
       if (centroidMarker) {
         if (ex.method === "centroid" || ex.marker) {
-          const reveal = Math.min(1, Math.max(0, (progress - 0.72) / 0.22));
+          const reveal = Math.min(1, Math.max(0, (progress - STEP_PROGRESS.stack) / 0.22));
           centroidMarker.visible = reveal > 0.02;
           const pulse = 1 + 0.08 * Math.sin(performance.now() * 0.006);
           centroidMarker.scale.setScalar((0.2 + 0.8 * reveal) * pulse);
@@ -2485,10 +2516,7 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
         }
       }
 
-      if (progress < 0.24) setActiveStep("region");
-      else if (progress < 0.43) setActiveStep("slice");
-      else if (progress < 0.72) setActiveStep("rotate");
-      else setActiveStep("stack");
+      setActiveStep(policy.stepId);
 
       let currentValue = interval.min + (interval.max - interval.min) * clamp01(stackPhase || 0.56);
       if (ex.method === "pump-bowl") {
@@ -2553,9 +2581,28 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
     function resize() {
       const width = renderer.domElement.clientWidth;
       const height = renderer.domElement.clientHeight;
+      if (width < 2 || height < 2) return;
       renderer.setSize(width, height, false);
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
+      // Re-frame when the panel size changes (e.g. 60/40 layout) unless user orbited.
+      if (!viewUserAdjusted && activeExample) {
+        if (activeExample.method === "goat-barn") {
+          root.rotation.y = 0;
+          controls.target.set(xToWorld(0), 0, yToWorld(0));
+          camera.position.set(xToWorld(0), 12.5, yToWorld(0) + 0.08);
+          applyViewLimits(12.5);
+        } else if (activeExample.method === "pool-fill") {
+          root.rotation.y = -0.18;
+          controls.target.set(0, 0.45, 0);
+          camera.position.set(4.2, 3.2, 4.4);
+          applyViewLimits(6);
+        } else {
+          fitCameraToExample(activeExample);
+        }
+        controls.update();
+      }
+      renderScene();
     }
 
     function renderScene() {
@@ -2641,6 +2688,7 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
 
 
     function resetCameraView() {
+      viewUserAdjusted = false;
       if (activeExample.method === "goat-barn") {
         root.rotation.y = 0;
         controls.target.set(xToWorld(0), 0, yToWorld(0));
@@ -2729,7 +2777,7 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
       if (event.origin !== window.location.origin) return;
       if (window.parent !== window && event.source !== window.parent) return;
       const data = event.data;
-      if (!data || data.type !== "integral-studio") return;
+      if (!isSceneMessage(data)) return;
       switch (data.action) {
         case "setShells": {
           const value = Math.max(4, Math.min(48, Number(data.value) || 14));
@@ -2791,14 +2839,12 @@ import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
           break;
         }
         case "getState": {
-          event.source?.postMessage({
-            type: "integral-studio",
-            action: "state",
+          event.source?.postMessage(childEnvelope("state", {
             progress,
             playing,
             speed: Number(speedInput.value),
             shells: Number(shellCountInput.value)
-          }, event.origin);
+          }), event.origin);
           break;
         }
         case "setExample": {

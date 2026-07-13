@@ -1,6 +1,22 @@
+/**
+ * Practice app shell — wires problem module, view, and SceneController.
+ * Domain logic lives in problemService / materializeVisual / animationTimeline.
+ */
 import "./style.css";
-import { getBriggsProblem, briggsProblemCount, loadBriggsBank, QUESTIONS_PER_TOPIC } from "./briggsProblems.js";
-import { buildLegacySpec, resolveVisualSpec, problemHasDualMethod } from "./visualSpecs.js";
+import {
+  TOPICS,
+  QUESTIONS_PER_TOPIC,
+  loadBriggsBank,
+  loadProblem,
+  visualLabel as problemVisualLabel
+} from "./problemService.js";
+import {
+  materializeVisualExample,
+  materializeVisualSpec,
+  problemHasDualMethod
+} from "./materializeVisual.js";
+import { STEP_PROGRESS, animationStepsForMethod } from "./animationTimeline.js";
+import { createSceneController } from "./sceneController.js";
 
 let katex;
 let practiceDependenciesPromise;
@@ -17,17 +33,6 @@ function loadPracticeDependencies() {
   }
   return practiceDependenciesPromise;
 }
-
-const TOPICS = {
-  fundamentals: { label: "Fundamentals", icon: "∫", description: "Antiderivatives" },
-  area: { label: "Area", icon: "▨", description: "Accumulated area" },
-  volumes: { label: "Volumes", icon: "◒", description: "Shells & washers" },
-  centroids: { label: "Centroids", icon: "◎", description: "Balance points" },
-  arc: { label: "Arc Length", icon: "⌒", description: "Curve length" },
-  surface: { label: "Surface Area", icon: "◌", description: "Revolution surface" },
-  inertia: { label: "Inertia", icon: "I", description: "Area moments" },
-  applications: { label: "Word Problems", icon: "W", description: "Work, pumping & motion" }
-};
 
 const state = {
   screen: "landing",
@@ -62,8 +67,6 @@ const isCompactViewport = () => window.matchMedia("(max-width: 860px)").matches;
 const scrollBehavior = () => (prefersReducedMotion() ? "auto" : "smooth");
 state.playing = !prefersReducedMotion();
 
-const STEP_PROGRESS = { region: 0, slice: 0.24, rotate: 0.43, stack: 0.72 };
-
 function maxStrips() {
   return isCoarsePointer() || isNarrowViewport() ? 24 : 48;
 }
@@ -95,71 +98,11 @@ function vizPaletteFromCss() {
 }
 
 function animationStepsFor(problem) {
-  const method = resolveVisualSpec(problem, { alternate: state.alternate })?.method
-    || problem?.visual
-    || "area";
-  if (method === "arc") {
-    return [
-      { id: "region", label: "Curve" },
-      { id: "slice", label: "Points" },
-      { id: "rotate", label: "Segments" },
-      { id: "stack", label: "Sum" }
-    ];
-  }
-  if (method === "pump-bowl") {
-    return [
-      { id: "region", label: "Bowl" },
-      { id: "slice", label: "Slice" },
-      { id: "rotate", label: "Lift" },
-      { id: "stack", label: "Work" }
-    ];
-  }
-  if (method === "pool-fill") {
-    return [
-      { id: "region", label: "Pool" },
-      { id: "slice", label: "Slice" },
-      { id: "rotate", label: "Volume" },
-      { id: "stack", label: "Fill" }
-    ];
-  }
-  if (method === "goat-barn") {
-    return [
-      { id: "region", label: "Barn" },
-      { id: "slice", label: "Sector" },
-      { id: "rotate", label: "Wrap" },
-      { id: "stack", label: "Area" }
-    ];
-  }
-  if (method === "surface-x" || method === "surface-y") {
-    return [
-      { id: "region", label: "Region" },
-      { id: "slice", label: "Slice" },
-      { id: "rotate", label: "Band" },
-      { id: "stack", label: "Surface" }
-    ];
-  }
-  if (method === "centroid" || problem?.visual === "centroid") {
-    return [
-      { id: "region", label: "Region" },
-      { id: "slice", label: "Strip" },
-      { id: "rotate", label: "Moment" },
-      { id: "stack", label: "Balance" }
-    ];
-  }
-  if (method === "area" || method === "inertia" || problem?.visual === "area" || problem?.visual === "inertia") {
-    return [
-      { id: "region", label: "Region" },
-      { id: "slice", label: "Strip" },
-      { id: "rotate", label: "dA" },
-      { id: "stack", label: "Sum" }
-    ];
-  }
-  return [
-    { id: "region", label: "Region" },
-    { id: "slice", label: "Slice" },
-    { id: "rotate", label: "Rotate" },
-    { id: "stack", label: "Stack" }
-  ];
+  const method =
+    materializeVisualSpec(problem, { alternate: state.alternate })?.method ||
+    problem?.visual ||
+    "area";
+  return animationStepsForMethod(method, problem?.visual);
 }
 
 function choiceAriaLabel(option, index, problem) {
@@ -177,7 +120,6 @@ function pillStatusIcon(status) {
   return "";
 }
 
-/** Questions shown per band in the bottom navigator (avoids a 50-pill scroll strip). */
 const QUESTION_BAND = 10;
 
 function questionBandStart(index) {
@@ -188,47 +130,20 @@ function renderProblemNavigator() {
   const current = state.questionIndex;
   const bandStart = questionBandStart(current);
   const bandEnd = Math.min(bandStart + QUESTION_BAND, QUESTIONS_PER_TOPIC);
-  const bandCount = Math.ceil(QUESTIONS_PER_TOPIC / QUESTION_BAND);
-
-  const bands = Array.from({ length: bandCount }, (_, i) => {
-    const start = i * QUESTION_BAND;
-    const end = Math.min(start + QUESTION_BAND, QUESTIONS_PER_TOPIC);
-    const active = start === bandStart;
-    let answered = 0;
-    let correct = 0;
-    for (let q = start; q < end; q += 1) {
-      const status = problemStatus(q);
-      if (status === true || status === false) answered += 1;
-      if (status === true) correct += 1;
-    }
-    const progressHint = answered
-      ? `, ${answered} tried${correct ? `, ${correct} correct` : ""}`
-      : "";
-    return `<button type="button" class="problem-band${active ? " active" : ""}${answered ? " has-progress" : ""}" data-question-band="${start}" aria-pressed="${active}" aria-label="Questions ${start + 1} to ${end}${progressHint}"><span class="problem-band-label">${start + 1}–${end}</span></button>`;
-  }).join("");
 
   const pills = Array.from({ length: bandEnd - bandStart }, (_, offset) => {
     const index = bandStart + offset;
     const status = problemStatus(index);
     const statusWord = status === true ? ", correct" : status === false ? ", incorrect" : "";
-    return `<button type="button" class="problem-pill ${index === current ? "active" : ""} ${status === true ? "correct" : ""} ${status === false ? "incorrect" : ""}" data-question="${index}" aria-label="Question ${index + 1}${statusWord}" aria-current="${index === current ? "step" : "false"}"><span class="problem-pill-num">${index + 1}</span>${pillStatusIcon(status)}</button>`;
+    return `<button type="button" class="problem-pill ${index === current ? "active" : ""} ${status === true ? "correct" : ""} ${status === false ? "incorrect" : ""}" data-question="${index}" aria-label="Question ${index + 1} of ${QUESTIONS_PER_TOPIC}${statusWord}" aria-current="${index === current ? "step" : "false"}"><span class="problem-pill-num">${index + 1}</span>${pillStatusIcon(status)}</button>`;
   }).join("");
 
   return `
     <nav class="problem-navigator" aria-label="Questions">
-      <div class="problem-nav-toolbar">
-        <button type="button" class="secondary problem-nav-step" data-question-nav="previous" ${current === 0 ? "disabled" : ""} aria-label="Previous question">←</button>
-        <form class="problem-jump" id="problem-jump" autocomplete="off">
-          <label for="problem-jump-input" class="sr-only">Go to question</label>
-          <input id="problem-jump-input" class="problem-jump-input" name="question" type="number" inputmode="numeric" min="1" max="${QUESTIONS_PER_TOPIC}" value="${current + 1}" title="Go to question" aria-describedby="problem-jump-hint" />
-          <span id="problem-jump-hint" class="sr-only">Enter 1–${QUESTIONS_PER_TOPIC}, then Enter or Go.</span>
-          <button type="submit" class="secondary problem-jump-go" aria-label="Go to question number">Go</button>
-        </form>
-        <div class="problem-bands" role="group" aria-label="Question ranges">${bands}</div>
-        <p class="problem-nav-position" aria-live="polite"><span class="problem-nav-current">${current + 1}</span><span class="problem-nav-total">/${QUESTIONS_PER_TOPIC}</span></p>
-        <button type="button" class="secondary problem-nav-step" data-question-nav="next" ${current === QUESTIONS_PER_TOPIC - 1 ? "disabled" : ""} aria-label="Next question">→</button>
-      </div>
+      <button type="button" class="secondary problem-nav-step" data-question-nav="previous" ${current === 0 ? "disabled" : ""} aria-label="Previous question">←</button>
       <div class="problem-pills" role="group" aria-label="Questions ${bandStart + 1} to ${bandEnd}">${pills}</div>
+      <button type="button" class="secondary problem-nav-step" data-question-nav="next" ${current === QUESTIONS_PER_TOPIC - 1 ? "disabled" : ""} aria-label="Next question">→</button>
+      <span class="sr-only" aria-live="polite">Question ${current + 1} of ${QUESTIONS_PER_TOPIC}</span>
     </nav>`;
 }
 
@@ -266,7 +181,7 @@ function bindStepJumpControls() {
       }
       if (progressOut) progressOut.textContent = `${Math.round(progress * 100)}%`;
       syncPlayButton();
-      postToScene({ action: "setProgress", value: progress });
+      sceneHandle?.post({ action: "setProgress", value: progress });
       updateAnimationStep(step);
     });
   });
@@ -298,416 +213,54 @@ function applyDualMethodUi(problem) {
   }
 }
 
-const escape = value => String(value).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" }[c]));
+const escape = value =>
+  String(value).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" }[c]));
 const normalizeLatex = value => String(value).replace(/\\\\/g, "\\");
-const tex = (value, display = false) => katex.renderToString(normalizeLatex(value), {
-  displayMode: display,
-  throwOnError: false,
-  strict: "ignore",
-  // Never allow KaTeX trust commands (\html, \href javascript:, etc.).
-  trust: false,
-  maxSize: 20,
-  maxExpand: 500
-});
-/** Escape plain text; only KaTeX output for \(...\) / \[...\] is trusted HTML. */
+const tex = (value, display = false) =>
+  katex.renderToString(normalizeLatex(value), {
+    displayMode: display,
+    throwOnError: false,
+    strict: "ignore",
+    trust: false,
+    maxSize: 20,
+    maxExpand: 500
+  });
+
 const richMath = value => {
-  const source = normalizeLatex(value);
-  const re = /\\\[([\s\S]*?)\\\]|\\\(([\s\S]*?)\\\)/g;
-  let result = "";
-  let lastIndex = 0;
+  const text = String(value ?? "");
+  const parts = [];
+  const re = /\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\$([^$\n]+?)\$/g;
+  let last = 0;
   let match;
-  while ((match = re.exec(source)) !== null) {
-    if (match.index > lastIndex) {
-      result += escape(source.slice(lastIndex, match.index)).replace(/\n/g, "<br>");
-    }
-    result += match[1] != null ? tex(match[1], true) : tex(match[2], false);
-    lastIndex = match.index + match[0].length;
+  while ((match = re.exec(text))) {
+    if (match.index > last) parts.push(escape(text.slice(last, match.index)));
+    const display = match[1] != null || match[2] != null;
+    const body = match[1] ?? match[2] ?? match[3] ?? match[4] ?? "";
+    parts.push(tex(body, display));
+    last = match.index + match[0].length;
   }
-  if (lastIndex < source.length) {
-    result += escape(source.slice(lastIndex)).replace(/\n/g, "<br>");
-  }
-  return result;
+  if (last < text.length) parts.push(escape(text.slice(last)));
+  return parts.join("") || escape(text);
 };
-const mathDescription = value => normalizeLatex(value)
-  .replace(/\\frac\{([^{}]+)\}\{([^{}]+)\}/g, "$1 over $2")
-  .replace(/\\sqrt\{([^{}]+)\}/g, "square root of $1")
-  .replace(/\\int_\{?([0-9a-zA-Z])\}?\^\{?([0-9a-zA-Z])\}?/g, " integral from $1 to $2 of ")
-  .replace(/\\pi/g, " pi ")
-  .replace(/\\,/g, " ")
-  .replace(/\^\{([^{}]+)\}/g, " to the power of $1")
-  .replace(/\^([^\s{}])/g, " to the power of $1")
-  .replace(/[\\{}]/g, " ")
-  .replace(/\s+/g, " ")
-  .trim();
-const choice = (id, latex, label) => ({ id, latex, label });
-const shuffle = values => [...values].sort(() => Math.random() - 0.5);
-const num = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
-const step = (title, body) => ({ title, body });
 
-function finalizeProblem(item) {
-  item.choices = shuffle(item.choices);
-  item.correctId = item.choices.find(option => option.label === "Correct")?.id;
-  return item;
-}
-
-function makeProblem(topic) {
-  const briggsCount = briggsProblemCount(topic);
-  if (state.questionIndex < briggsCount) {
-    return finalizeProblem(getBriggsProblem(topic, null, state.questionIndex));
-  }
-
-  const range = { a: [2, 8], b: [1, 6], n: [2, 5] };
-  const a = num(range.a[0], range.a[1]);
-  const b = num(range.b[0], range.b[1]);
-  const n = num(range.n[0], range.n[1]);
-
-  const library = {
-    fundamentals: () => ({
-      title: "Antiderivative",
-      prompt: `Find \\(\\int (${a}x^${n} + ${b})\\,dx\\).`,
-      choices: [
-        choice("a", `\\frac{${a}}{${n + 1}}x^{${n + 1}} + ${b}x + C`, "Correct"),
-        choice("b", `${a * n}x^{${n - 1}}+${b}`, "Differentiated"),
-        choice("c", `\\frac{${a}}{${n}}x^{${n}} + ${b}`, "Forgot the power rule"),
-        choice("d", `\\frac{${a}}{${n + 1}}x^{${n + 1}} + ${b} + C`, "Missed integral of constant")
-      ],
-      steps: [
-        step(
-          "What an integral asks for",
-          `Integration reverses differentiation. We want every function whose derivative is the integrand \\(${a}x^{${n}}+${b}\\). That family is the antiderivative.`
-        ),
-        step(
-          "Split the integral term by term",
-          `Addition is safe under the integral sign: \\[\\int(${a}x^{${n}}+${b})\\,dx=${a}\\int x^{${n}}\\,dx+\\int ${b}\\,dx\\]`
-        ),
-        step(
-          "Apply the power rule",
-          `Raise the exponent by one, then divide by the new exponent: \\[\\int x^{p}\\,dx=\\frac{x^{p+1}}{p+1}+C\\] With \\(p=${n}\\), \\[${a}\\int x^{${n}}\\,dx=${a}\\cdot\\frac{x^{${n + 1}}}{${n + 1}}=\\frac{${a}}{${n + 1}}x^{${n + 1}}\\]`
-        ),
-        step(
-          "Integrate the constant term",
-          `A constant becomes a linear term: \\[\\int ${b}\\,dx=${b}x\\]`
-        ),
-        step(
-          "Include the family constant",
-          `Differentiating erases constants, so the full answer ends with \\(+C\\) — every valid antiderivative differs only by that constant.`
-        )
-      ],
-      finalAnswer: `\\int(${a}x^{${n}}+${b})\\,dx=\\frac{${a}}{${n + 1}}x^{${n + 1}}+${b}x+C`,
-      insight: "Power rule: raise the exponent, divide by the new exponent, and keep \\(+C\\).",
-      visual: "area"
-    }),
-
-    area: () => {
-      const exact = (a * b * b) / 2;
-      return {
-        title: "Area",
-        prompt: `Find the exact area under \\(y=${a}x\\) from \\(x=0\\) to \\(x=${b}\\).`,
-        choices: [
-          choice("a", `${exact}`, "Correct"),
-          choice("b", `${a * b}`, "Used a rectangle"),
-          choice("c", `${a * b * b}`, "Forgot one-half"),
-          choice("d", `${(b * b) / 2}`, "Ignored coefficient")
-        ],
-        steps: [
-          step(
-            "Turn area into a definite integral",
-            `When \\(f\\) is continuous and nonnegative, the exact area under the graph from \\(x=0\\) to \\(x=${b}\\) is \\[A=\\int_0^{${b}} ${a}x\\,dx\\]`
-          ),
-          step(
-            "Read a thin vertical strip",
-            `At a fixed \\(x\\), strip height is \\(f(x)=${a}x\\) and width is \\(dx\\), so \\(dA=(${a}x)\\,dx\\). The integral adds every strip.`
-          ),
-          step(
-            "Evaluate the antiderivative",
-            `\\[${a}\\int_0^{${b}} x\\,dx=${a}\\left[\\frac{x^2}{2}\\right]_0^{${b}}=${a}\\left(\\frac{${b}^2}{2}-0\\right)\\]`
-          ),
-          step(
-            "Simplify to the exact value",
-            `\\[A=${a}\\cdot\\frac{${b * b}}{2}=${exact}\\] square units.`
-          )
-        ],
-        finalAnswer: `A=${exact}`,
-        insight: "Area is accumulated height × width — then take the continuous limit.",
-        visual: "area"
-      };
-    },
-
-    volumes: () => {
-      const b3 = b * b * b;
-      const correct = `\\frac{${2 * a * b3}\\pi}{3}`;
-      const wrongDisk = `\\frac{${a * a * b3}\\pi}{3}`;
-      const wrongHalf = `\\frac{${a * b3}\\pi}{3}`;
-      const wrongNoA = `\\frac{${2 * b3}\\pi}{3}`;
-      return {
-        title: "Volume",
-        prompt: `The region under \\(y=${a}x\\) from \\(x=0\\) to \\(x=${b}\\) is rotated about the y-axis. Find the exact volume.`,
-        choices: [
-          choice("a", correct, "Correct"),
-          choice("b", wrongDisk, "Forgot the shell factor \\(2\\pi\\)"),
-          choice("c", wrongHalf, "Missing a factor of 2"),
-          choice("d", wrongNoA, "Forgot the height coefficient")
-        ],
-        steps: [
-          step(
-            "Shells with vertical strips",
-            `Use a vertical strip parallel to the y-axis: radius \\(r=x\\), height \\(h=${a}x\\), thickness \\(dx\\).`
-          ),
-          step(
-            "Write the shell integral",
-            `\\[V=2\\pi\\int_0^{${b}} x(${a}x)\\,dx=2\\pi ${a}\\int_0^{${b}} x^{2}\\,dx\\]`
-          ),
-          step(
-            "Find an antiderivative",
-            `\\[\\int x^{2}\\,dx=\\frac{x^{3}}{3}\\]`
-          ),
-          step(
-            "Evaluate the upper bound",
-            `\\[\\frac{(${b})^{3}}{3}=\\frac{${b3}}{3}\\]`
-          ),
-          step(
-            "Evaluate the lower bound",
-            `\\[\\frac{(0)^{3}}{3}=0\\]`
-          ),
-          step(
-            "Subtract and multiply the constants",
-            `\\[V=2\\pi ${a}\\left(\\frac{${b3}}{3}-0\\right)=\\frac{${2 * a * b3}\\pi}{3}\\]`
-          )
-        ],
-        alternateSteps: [
-          step(
-            "Disks with horizontal strips",
-            `Slice horizontally and revolve about the y-axis. At height \\(y\\), the radius is \\(R=x=y/${a}\\) and thickness is \\(dy\\).`
-          ),
-          step(
-            "Write the disk integral",
-            `\\[V=\\pi\\int_0^{${a * b}}\\left(\\frac{y}{${a}}\\right)^2\\,dy=\\frac{\\pi}{${a * a}}\\int_0^{${a * b}} y^{2}\\,dy\\]`
-          ),
-          step(
-            "Find an antiderivative",
-            `\\[\\int y^{2}\\,dy=\\frac{y^{3}}{3}\\]`
-          ),
-          step(
-            "Evaluate the upper bound",
-            `\\[\\frac{(${a * b})^{3}}{3}=\\frac{${a * a * a * b3}}{3}\\]`
-          ),
-          step(
-            "Evaluate the lower bound",
-            `\\[\\frac{(0)^{3}}{3}=0\\]`
-          ),
-          step(
-            "Subtract and multiply the constants",
-            `\\[V=\\frac{\\pi}{${a * a}}\\left(\\frac{${a * a * a * b3}}{3}-0\\right)=\\frac{${2 * a * b3}\\pi}{3}\\]`
-          )
-        ],
-        finalAnswer: `V=\\frac{${2 * a * b3}\\pi}{3}`,
-        insight: "The same volume works with either vertical shells or horizontal disks — only the slice direction changes.",
-        visual: "volume",
-        dualMethod: true
-      };
-    },
-
-    centroids: () => ({
-      title: "Centroid",
-      prompt: `A triangle has vertices \\((0,0)\\), \\((0,${a})\\), and \\((${b},0)\\). Find the exact value of \\(\\bar{x}\\).`,
-      choices: [
-        choice("a", `\\frac{${b}}{3}`, "Correct"),
-        choice("b", `\\frac{${b}}{2}`, "Midpoint"),
-        choice("c", `\\frac{${a}}{3}`, "Used y-coordinate"),
-        choice("d", `${b}`, "Vertex")
-      ],
-      steps: [
-        step(
-          "What the centroid represents",
-          `For a uniform plate, the centroid is the balance point — the average location of all area.`
-        ),
-        step(
-          "Use the triangle vertex formula",
-          `For vertices \\((x_1,y_1),(x_2,y_2),(x_3,y_3)\\), \\[\\bar{x}=\\frac{x_1+x_2+x_3}{3}\\]`
-        ),
-        step(
-          "Average the three x-coordinates",
-          `Vertices are \\((0,0)\\), \\((0,${a})\\), and \\((${b},0)\\): \\[\\bar{x}=\\frac{0+0+${b}}{3}=\\frac{${b}}{3}\\]`
-        ),
-        step(
-          "Sanity check",
-          `A right triangle’s centroid sits one-third of the way from the right angle along each median — not at a side midpoint.`
-        )
-      ],
-      finalAnswer: `\\bar{x}=\\frac{${b}}{3}`,
-      insight: "Triangle centroids average the three vertices: sum the coordinates and divide by 3.",
-      visual: "centroid"
-    }),
-
-    arc: () => {
-      const correct = `${n}\\sqrt{1+${a * a}}`;
-      return {
-        title: "Arc length",
-        prompt: `Find the exact arc length of \\(y=${a}x+${b}\\) on \\(0\\le x\\le ${n}\\).`,
-        choices: [
-          choice("a", correct, "Correct"),
-          choice("b", `${n * a}`, "Only vertical change times length"),
-          choice("c", `${n}\\sqrt{1+${a}}`, "Derivative not squared"),
-          choice("d", `${(a * n * n) / 2 + b * n}`, "Computed area instead")
-        ],
-        steps: [
-          step(
-            "Zoom into a tiny piece of the curve",
-            `A short segment has horizontal change \\(dx\\) and vertical change \\(dy=f'(x)\\,dx\\). Length is the hypotenuse.`
-          ),
-          step(
-            "Write the arc-length element",
-            `\\[ds=\\sqrt{1+[f'(x)]^{2}}\\,dx\\]`
-          ),
-          step(
-            "Differentiate the given line",
-            `\\(f(x)=${a}x+${b}\\) has constant slope \\(f'(x)=${a}\\), so \\[ds=\\sqrt{1+${a * a}}\\,dx\\]`
-          ),
-          step(
-            "Integrate and simplify",
-            `\\[L=\\int_0^{${n}}\\sqrt{1+${a * a}}\\,dx=\\sqrt{1+${a * a}}\\cdot ${n}=${n}\\sqrt{1+${a * a}}\\]`
-          )
-        ],
-        finalAnswer: `L=${n}\\sqrt{1+${a * a}}`,
-        insight: "Arc length uses the derivative inside a square root — not the original function.",
-        visual: "curve"
-      };
-    },
-
-    surface: () => {
-      const inner = `${a}\\cdot\\frac{${n}^{2}}{2}+${b}\\cdot ${n}`;
-      const correct = `2\\pi\\sqrt{1+${a * a}}\\left(${inner}\\right)`;
-      const wrongVol = `\\pi\\left(\\frac{${a * a} ${n}^{3}}{3}+${a * b} ${n}^{2}+${b * b} ${n}\\right)`;
-      const wrongNoSlant = `2\\pi\\left(${inner}\\right)`;
-      const wrongArc = `${n}\\sqrt{1+${a * a}}`;
-      return {
-        title: "Surface area",
-        prompt: `The graph of \\(y=${a}x+${b}\\) on \\(0\\le x\\le ${n}\\) is rotated about the x-axis. Find the exact surface area.`,
-        choices: [
-          choice("a", correct, "Correct"),
-          choice("b", wrongVol, "Volume formula"),
-          choice("c", wrongNoSlant, "Missing slant factor"),
-          choice("d", wrongArc, "Arc length only")
-        ],
-        steps: [
-          step(
-            "Picture a thin band on the surface",
-            `Rotating a short curve segment about the x-axis sweeps a narrow band. Area is circumference times slant length.`
-          ),
-          step(
-            "Identify radius and slant length",
-            `Radius is \\(y=${a}x+${b}\\). Slant length is \\(ds=\\sqrt{1+${a * a}}\\,dx\\).`
-          ),
-          step(
-            "Form the surface integral",
-            `\\[S=2\\pi\\int_0^{${n}}(${a}x+${b})\\sqrt{1+${a * a}}\\,dx=2\\pi\\sqrt{1+${a * a}}\\int_0^{${n}}(${a}x+${b})\\,dx\\]`
-          ),
-          step(
-            "Evaluate the remaining integral",
-            `\\[\\int_0^{${n}}(${a}x+${b})\\,dx=\\left[\\frac{${a}}{2}x^{2}+${b}x\\right]_0^{${n}}=${inner}\\] so \\[S=2\\pi\\sqrt{1+${a * a}}\\left(${inner}\\right)\\]`
-          )
-        ],
-        finalAnswer: `S=2\\pi\\sqrt{1+${a * a}}\\left(${inner}\\right)`,
-        insight: "Surface of revolution: \\(2\\pi \\times \\text{radius} \\times \\text{slant length}\\).",
-        visual: "surface"
-      };
-    },
-
-    inertia: () => {
-      const correct = `\\frac{${b}\\cdot ${a}^{3}}{12}`;
-      return {
-        title: "Moment of inertia",
-        prompt: `A rectangle has base \\(${b}\\) and height \\(${a}\\). Find the exact centroidal area moment of inertia about the x-axis.`,
-        choices: [
-          choice("a", correct, "Correct"),
-          choice("b", `\\frac{${a}\\cdot ${b}^{3}}{12}`, "About y-axis"),
-          choice("c", `${a * b}`, "Area only"),
-          choice("d", `\\frac{${b}\\cdot ${a}^{2}}{2}`, "Missing distance squared")
-        ],
-        steps: [
-          step(
-            "What \\(I_x\\) measures",
-            `Area moment of inertia about the x-axis weights each area piece by the square of its distance from that axis.`
-          ),
-          step(
-            "Use the standard rectangle formula",
-            `About the centroidal x-axis (through the center, parallel to the base): \\[I_x=\\frac{b h^{3}}{12}\\]`
-          ),
-          step(
-            "Substitute base and height",
-            `With \\(b=${b}\\) and \\(h=${a}\\): \\[I_x=\\frac{${b}\\cdot ${a}^{3}}{12}\\]`
-          ),
-          step(
-            "Check the axis orientation",
-            `\\(\\frac{h b^{3}}{12}\\) would be about the centroidal y-axis. The dimension perpendicular to the axis is cubed.`
-          )
-        ],
-        finalAnswer: `I_x=\\frac{${b}\\cdot ${a}^{3}}{12}`,
-        insight: "Distance is squared in the definition — height enters as \\(h^{3}\\) for a horizontal centroidal axis.",
-        visual: "inertia"
-      };
-    },
-
-    applications: () => {
-      const lift = a + b;
-      const work = a * 9.8 * (lift * b - (b * b) / 2);
-      return {
-        title: "Lifting work",
-        prompt: `A \\(${a}\\)-meter chain with density \\(${b}\\) kg/m hangs vertically. How much work (in joules) is required to lift it to the top, using \\(g=9.8\\) m/s\\(^2\\)?`,
-        choices: [
-          choice("a", `${work}`, "Correct"),
-          choice("b", `${a * b * 9.8 * lift}`, "Lifted entire chain full height"),
-          choice("c", `${Math.round(a * b)}`, "Mass only"),
-          choice("d", `${Math.round(a * b * 9.8)}`, "Forgot lift distance")
-        ],
-        steps: [
-          step(
-            "Slice the chain horizontally",
-            `A segment at height \\(y\\) (from the bottom) has mass \\(\\rho\\,dy\\) and must be lifted \\(${lift}-y\\) meters.`
-          ),
-          step(
-            "Write the work integral",
-            `\\[W=\\int_0^{${a}} ${b}(9.8)(${lift}-y)\\,dy=${b * 9.8}\\int_0^{${a}}(${lift}-y)\\,dy\\]`
-          ),
-          step(
-            "Find an antiderivative",
-            `\\[\\int(${lift}-y)\\,dy=${lift}y-\\frac{y^2}{2}\\]`
-          ),
-          step(
-            "Evaluate the upper bound",
-            `\\[${lift}(${a})-\\frac{(${a})^{2}}{2}=${lift * a - (a * a) / 2}\\]`
-          ),
-          step(
-            "Evaluate the lower bound",
-            `\\[${lift}(0)-\\frac{(0)^{2}}{2}=0\\]`
-          ),
-          step(
-            "Subtract and multiply density and gravity",
-            `\\[W=${b * 9.8}\\left(${lift * a - (a * a) / 2}-0\\right)=${work}\\text{ J}\\]`
-          )
-        ],
-        finalAnswer: `W=${work}\\text{ J}`,
-        insight: "Different chain segments travel different distances — integration is required.",
-        visual: "area"
-      };
-    }
-  };
-
-  const item = library[topic]();
-  item.given = { a, b, n };
-  item.visualSpec = buildLegacySpec(item);
-  if (item.dualMethod === true) {
-    item.dualMethod = Boolean(item.visualSpec?.alternateSpec);
-  }
-  return finalizeProblem(item);
-}
+const mathDescription = value =>
+  normalizeLatex(value)
+    .replace(/\\frac\{([^}]*)\}\{([^}]*)\}/g, "($1)/($2)")
+    .replace(/\\sqrt\{([^}]*)\}/g, "sqrt($1)")
+    .replace(/\\[a-zA-Z]+/g, " ")
+    .replace(/[{}]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 
 function saveProgress() {
-  localStorage.setItem("integral-studio-progress", JSON.stringify({
-    topic: state.topic,
-    correct: state.correct,
-    attempts: state.attempts
-  }));
+  localStorage.setItem(
+    "integral-studio-progress",
+    JSON.stringify({
+      topic: state.topic,
+      correct: state.correct,
+      attempts: state.attempts
+    })
+  );
 }
 
 function loadProgress() {
@@ -716,7 +269,9 @@ function loadProgress() {
     if (saved.topic && TOPICS[saved.topic]) state.topic = saved.topic;
     if (typeof saved.correct === "number") state.correct = saved.correct;
     if (typeof saved.attempts === "number") state.attempts = saved.attempts;
-  } catch { /* optional */ }
+  } catch {
+    /* optional */
+  }
 }
 
 function problemKey() {
@@ -725,7 +280,7 @@ function problemKey() {
 
 function currentProblem() {
   const key = problemKey();
-  return state.problemCache[key] || (state.problemCache[key] = makeProblem(state.topic));
+  return state.problemCache[key] || (state.problemCache[key] = loadProblem(state.topic, state.questionIndex));
 }
 
 function problemStatus(index) {
@@ -761,7 +316,6 @@ async function startPractice() {
   try {
     await loadPracticeDependencies();
   } catch {
-    // Allow a later click to retry transient KaTeX/CSS loading failures.
     practiceDependenciesPromise = null;
     state.practiceLoading = false;
     state.practiceError = "Practice could not load. Check your connection and try again.";
@@ -785,24 +339,11 @@ function goLanding() {
 }
 
 function visualLabel(problem) {
-  const spec = resolveVisualSpec(problem, { alternate: state.alternate });
-  if (problemHasDualMethod(problem)) return state.alternate ? "Horizontal strips" : "Vertical strips";
-  if (spec?.title) return spec.title;
-  if (state.topic === "fundamentals") return "Rate of change";
-  if (state.topic === "applications") return "Slice & sum";
-  const type = problem.visual;
-  return ({
-    area: "Area slices",
-    volume: state.alternate ? "Disks & washers" : "Shells",
-    centroid: "Centroid",
-    curve: "Arc length",
-    surface: "Surface bands",
-    inertia: "Axis distance"
-  })[type] || "Visual";
+  return problemVisualLabel(problem, { alternate: state.alternate });
 }
 
 function solutionMethodLabel(problem, alternate) {
-  const spec = resolveVisualSpec(problem, { alternate });
+  const spec = materializeVisualSpec(problem, { alternate });
   const vertical = spec?.orientation === "vertical";
   const shells = spec?.method?.startsWith("shell");
   const slice = vertical ? "Vertical strips" : "Horizontal strips";
@@ -810,16 +351,16 @@ function solutionMethodLabel(problem, alternate) {
   return `${slice} → ${sweep}`;
 }
 
-/** Template formulas for beginners, keyed by visual method / topic. */
 function equationsForProblem(problem) {
   if (Array.isArray(problem?.equations) && problem.equations.length) {
     return problem.equations;
   }
-  const method = resolveVisualSpec(problem, { alternate: state.alternate })?.method
-    || problem?.visualParams?.method
-    || problem?.visual
-    || state.topic
-    || "";
+  const method =
+    materializeVisualSpec(problem, { alternate: state.alternate })?.method ||
+    problem?.visualParams?.method ||
+    problem?.visual ||
+    state.topic ||
+    "";
   const m = String(method).toLowerCase();
   const topic = state.topic;
   if (topic === "fundamentals" || m.includes("fund")) {
@@ -895,10 +436,14 @@ function equationsForProblem(problem) {
 
 function renderEquationsBox(equations) {
   if (!equations?.length) return "";
-  const rows = equations.map(eq => `
+  const rows = equations
+    .map(
+      eq => `
     <li class="solution-equation-item">
       <div class="solution-equation-math">${tex(eq, true)}</div>
-    </li>`).join("");
+    </li>`
+    )
+    .join("");
   return `
     <aside class="solution-equations" aria-label="Equations to use">
       <p class="solution-equations-label">Equations to use</p>
@@ -907,10 +452,11 @@ function renderEquationsBox(equations) {
 }
 
 function renderSolutionSteps(steps, startIndex = 1) {
-  return steps.map((item, index) => {
-    const title = typeof item === "string" ? `Step ${startIndex + index}` : item.title;
-    const body = typeof item === "string" ? item : item.body;
-    return `
+  return steps
+    .map((item, index) => {
+      const title = typeof item === "string" ? `Step ${startIndex + index}` : item.title;
+      const body = typeof item === "string" ? item : item.body;
+      return `
       <li class="solution-step">
         <div class="solution-step-marker" aria-hidden="true">${startIndex + index}</div>
         <div class="solution-step-body">
@@ -918,7 +464,8 @@ function renderSolutionSteps(steps, startIndex = 1) {
           <div class="solution-step-text">${richMath(body)}</div>
         </div>
       </li>`;
-  }).join("");
+    })
+    .join("");
 }
 
 function renderSolution(p, correct) {
@@ -928,12 +475,15 @@ function renderSolution(p, correct) {
   const secondaryLabel = solutionMethodLabel(p, !state.alternate);
   const equationsHtml = renderEquationsBox(equationsForProblem(p));
   const stepsHtml = renderSolutionSteps(primarySteps);
-  const alternateHtml = dual && secondarySteps?.length ? `
+  const alternateHtml =
+    dual && secondarySteps?.length
+      ? `
     <div class="solution-method-block">
       <h3 class="solution-method-title">Alternate approach: ${secondaryLabel}</h3>
       <p class="solution-method-note">Same region and axis — switch the slice direction. Toggle the control above to animate this setup.</p>
       <ol class="solution-steps solution-steps-alt">${renderSolutionSteps(secondarySteps, primarySteps.length + 1)}</ol>
-    </div>` : "";
+    </div>`
+      : "";
 
   return `
     <section class="solution-panel is-open" id="solution-panel" aria-labelledby="solution-title" tabindex="-1">
@@ -943,16 +493,24 @@ function renderSolution(p, correct) {
       ${equationsHtml}
       <ol class="solution-steps">${stepsHtml}</ol>
       ${alternateHtml}
-      ${p.finalAnswer ? `
+      ${
+        p.finalAnswer
+          ? `
         <div class="solution-answer" role="region" aria-label="Final answer">
           <p class="solution-answer-label">Final answer</p>
           <div class="solution-answer-math">${tex(p.finalAnswer, true)}</div>
-        </div>` : ""}
-      ${p.insight ? `
+        </div>`
+          : ""
+      }
+      ${
+        p.insight
+          ? `
         <aside class="solution-insight" aria-label="Key takeaway">
           <p class="solution-insight-label">Remember</p>
           <p class="solution-insight-text">${richMath(p.insight)}</p>
-        </aside>` : ""}
+        </aside>`
+          : ""
+      }
     </section>`;
 }
 
@@ -970,13 +528,17 @@ function renderLanding() {
         <section class="landing-section" aria-labelledby="topic-heading">
           <h2 id="topic-heading" class="landing-label">Topic</h2>
           <div class="topic-grid" role="radiogroup" aria-labelledby="topic-heading">
-            ${Object.entries(TOPICS).map(([id, item]) => `
+            ${Object.entries(TOPICS)
+              .map(
+                ([id, item]) => `
               <button type="button" class="topic-card ${state.topic === id ? "selected" : ""}" role="radio" aria-checked="${state.topic === id}" tabindex="${state.topic === id ? "0" : "-1"}" data-topic="${id}">
                 <span class="topic-card-icon" aria-hidden="true">${item.icon}</span>
                 <span class="topic-card-label">${item.label}</span>
                 <span class="topic-card-desc">${escape(item.description)}</span>
               </button>
-            `).join("")}
+            `
+              )
+              .join("")}
           </div>
         </section>
         <button type="button" id="start-practice" class="primary landing-start" ${state.practiceLoading ? "disabled" : ""} aria-busy="${state.practiceLoading}">${state.practiceLoading ? "Loading practice..." : "Start practice"}</button>
@@ -1014,7 +576,7 @@ function renderPractice(options = {}) {
   const { preserveVisual = false } = options;
   const existingVisual = preserveVisual ? document.querySelector(".visual-panel") : null;
   const topic = TOPICS[state.topic];
-  const p = state.problem || (state.problem = makeProblem(state.topic));
+  const p = state.problem || (state.problem = currentProblem());
   const correct = state.checked && state.selected === p.correctId;
 
   document.querySelector("#app").innerHTML = `
@@ -1051,12 +613,16 @@ function renderPractice(options = {}) {
               </div>
             </div>
             <div class="model-controls">
-              ${problemHasDualMethod(p) ? `
+              ${
+                problemHasDualMethod(p)
+                  ? `
                 <div class="segmented" role="group" aria-label="Slice direction">
                   <button type="button" class="${!state.alternate ? "selected" : ""}" data-method="shells" aria-pressed="${!state.alternate}" aria-label="Vertical strips">Vertical<span class="label-rest"> strips</span></button>
                   <button type="button" class="${state.alternate ? "selected" : ""}" data-method="washers" aria-pressed="${state.alternate}" aria-label="Horizontal strips">Horizontal<span class="label-rest"> strips</span></button>
                 </div>
-              ` : ""}
+              `
+                  : ""
+              }
               <div class="control-grid">
                 <label class="control-field">
                   <span class="control-label">Strips</span>
@@ -1088,16 +654,17 @@ function renderPractice(options = {}) {
             </div>
             <h1 id="question-title">${richMath(p.prompt)}</h1>
             <div class="choices" role="radiogroup" aria-labelledby="question-title"${state.checked ? ' aria-describedby="question-feedback"' : ""}>
-              ${p.choices.map((option, index) => {
-                const isCorrect = state.checked && option.id === p.correctId;
-                const isIncorrect = state.checked && state.selected === option.id && option.id !== p.correctId;
-                const statusMark = isCorrect
-                  ? '<span class="choice-status" aria-hidden="true">✓</span>'
-                  : isIncorrect
-                    ? '<span class="choice-status" aria-hidden="true">✕</span>'
-                    : "";
-                const longChoice = String(option.latex || "").length >= 48;
-                return `
+              ${p.choices
+                .map((option, index) => {
+                  const isCorrect = state.checked && option.id === p.correctId;
+                  const isIncorrect = state.checked && state.selected === option.id && option.id !== p.correctId;
+                  const statusMark = isCorrect
+                    ? '<span class="choice-status" aria-hidden="true">✓</span>'
+                    : isIncorrect
+                      ? '<span class="choice-status" aria-hidden="true">✕</span>'
+                      : "";
+                  const longChoice = String(option.latex || "").length >= 48;
+                  return `
                 <button type="button"
                   class="choice ${longChoice ? "choice-long" : ""} ${state.selected === option.id ? "selected" : ""} ${isCorrect ? "correct" : ""} ${isIncorrect ? "incorrect" : ""}"
                   data-choice="${option.id}"
@@ -1110,19 +677,29 @@ function renderPractice(options = {}) {
                   <span class="choice-math">${tex(option.latex)}</span>
                   ${statusMark}
                 </button>`;
-              }).join("")}
+                })
+                .join("")}
             </div>
-            <div class="question-actions">
-              <button type="button" id="check" class="primary" ${!state.selected || state.checked ? "disabled" : ""}>Check answer</button>
-              ${state.checked ? '<button type="button" id="next" class="secondary">Next question →</button>' : ""}
-            </div>
-            ${state.checked ? `
+            ${
+              state.checked
+                ? `
               <div class="feedback ${correct ? "positive" : "negative"}" id="question-feedback" role="status" aria-live="polite">
-                <p class="feedback-message"><strong>${correct ? "Correct" : "Incorrect"}</strong> — ${correct
-                  ? "See the worked solution below."
-                  : "The correct choice is highlighted. Work the steps below."}</p>
+                <p class="feedback-message"><strong>${correct ? "Correct" : "Incorrect"}</strong> — ${
+                  correct
+                    ? "Worked solution below."
+                    : "Correct choice highlighted. Steps below."
+                }</p>
               </div>
-            ` : ""}
+            `
+                : ""
+            }
+            <div class="question-actions">
+              ${
+                state.checked
+                  ? `<button type="button" id="next" class="primary">Next question →</button>`
+                  : `<button type="button" id="check" class="primary" ${!state.selected ? "disabled" : ""}>Check answer</button>`
+              }
+            </div>
             ${state.showSolution ? renderSolution(p, correct) : ""}
           </section>
         </div>
@@ -1142,19 +719,23 @@ function renderPractice(options = {}) {
 
   if (state.showSolution) {
     requestAnimationFrame(() => {
+      const feedback = document.querySelector("#question-feedback");
       const panel = document.querySelector("#solution-panel");
-      if (!panel) return;
-      // On touch layouts the solution is the next task state; reveal it immediately
-      // so a slow smooth-scroll cannot leave the learner looking at the old answer.
-      panel.scrollIntoView({ behavior: isCompactViewport() ? "auto" : motion, block: "start" });
-      panel.focus({ preventScroll: true });
+      // Keep choice + feedback in view; only jump to solution on compact layouts.
+      const target = isCompactViewport() ? panel || feedback : feedback || panel;
+      if (target) {
+        target.scrollIntoView({
+          behavior: isCompactViewport() ? "auto" : motion,
+          block: "nearest"
+        });
+      }
+      panel?.focus({ preventScroll: true });
     });
   } else if (options.focusChoice) {
     requestAnimationFrame(() => {
       document.querySelector(`[data-choice="${options.focusChoice}"]`)?.focus();
     });
   }
-
 }
 
 function bindPracticeEvents(preserveVisual = false) {
@@ -1164,30 +745,8 @@ function bindPracticeEvents(preserveVisual = false) {
       goToQuestion(state.questionIndex + (button.dataset.questionNav === "next" ? 1 : -1));
     });
   });
-  document.querySelectorAll("[data-question-band]").forEach(button => {
-    button.addEventListener("click", () => {
-      const start = Number(button.dataset.questionBand);
-      const end = Math.min(start + QUESTION_BAND, QUESTIONS_PER_TOPIC);
-      // Stay on current question if already in this band; otherwise open the band start.
-      if (state.questionIndex < start || state.questionIndex >= end) {
-        goToQuestion(start);
-      }
-    });
-  });
   document.querySelectorAll("[data-question]").forEach(button => {
     button.addEventListener("click", () => goToQuestion(Number(button.dataset.question)));
-  });
-  document.querySelector("#problem-jump")?.addEventListener("submit", event => {
-    event.preventDefault();
-    const input = document.querySelector("#problem-jump-input");
-    if (!input) return;
-    const raw = Number(input.value);
-    if (!Number.isFinite(raw)) {
-      input.focus();
-      input.select();
-      return;
-    }
-    goToQuestion(Math.round(raw) - 1);
   });
   const choiceButtons = [...document.querySelectorAll("[data-choice]")];
   choiceButtons.forEach((button, index) => {
@@ -1222,7 +781,7 @@ function bindPracticeEvents(preserveVisual = false) {
         state.method = button.dataset.method;
         const problem = state.problem;
         applyDualMethodUi(problem);
-        const visualSpec = resolveVisualSpec(problem, { alternate: state.alternate });
+        const visualSpec = materializeVisualSpec(problem, { alternate: state.alternate });
         if (visualSpec && document.querySelector(".legacy-animation")) {
           state.vizLoading = true;
           state.vizError = null;
@@ -1235,7 +794,7 @@ function bindPracticeEvents(preserveVisual = false) {
             errorEl.hidden = true;
             errorEl.setAttribute("aria-hidden", "true");
           }
-          postToScene({ action: "setExample", spec: visualSpec });
+          sceneHandle?.post({ action: "setExample", spec: visualSpec });
           syncSceneControls();
         } else {
           mountScene(problem);
@@ -1248,14 +807,14 @@ function bindPracticeEvents(preserveVisual = false) {
       const output = document.querySelector("#slices-out");
       if (output) output.textContent = state.slices;
       syncSliderAria(event.target, `${state.slices} strips`);
-      postToScene({ action: "setShells", value: state.slices });
+      sceneHandle?.post({ action: "setShells", value: state.slices });
     });
     document.querySelector("#playback-speed")?.addEventListener("input", event => {
       state.playbackSpeed = Number(event.target.value);
       const output = document.querySelector("#speed-out");
       if (output) output.textContent = `${state.playbackSpeed.toFixed(2)}×`;
       syncSliderAria(event.target, `${state.playbackSpeed.toFixed(2)} times speed`);
-      postToScene({ action: "setSpeed", value: state.playbackSpeed });
+      sceneHandle?.post({ action: "setSpeed", value: state.playbackSpeed });
     });
     document.querySelector("#playback-progress")?.addEventListener("input", event => {
       state.playbackProgress = Number(event.target.value);
@@ -1264,12 +823,12 @@ function bindPracticeEvents(preserveVisual = false) {
       if (output) output.textContent = `${Math.round(state.playbackProgress * 100)}%`;
       syncSliderAria(event.target, `${Math.round(state.playbackProgress * 100)} percent`);
       syncPlayButton();
-      postToScene({ action: "setProgress", value: state.playbackProgress });
+      sceneHandle?.post({ action: "setProgress", value: state.playbackProgress });
     });
     document.querySelector("#play-toggle")?.addEventListener("click", () => {
       state.playing = !state.playing;
       syncPlayButton();
-      postToScene({ action: state.playing ? "play" : "pause" });
+      sceneHandle?.post({ action: state.playing ? "play" : "pause" });
     });
     document.querySelector("#reset-playback")?.addEventListener("click", () => {
       state.playbackProgress = 0;
@@ -1279,9 +838,9 @@ function bindPracticeEvents(preserveVisual = false) {
       if (progressInput) progressInput.value = "0";
       if (progressOut) progressOut.textContent = "0%";
       syncPlayButton();
-      postToScene({ action: "resetPlayback" });
+      sceneHandle?.post({ action: "resetPlayback" });
     });
-    document.querySelector("#reset-view")?.addEventListener("click", () => sceneController?.reset());
+    document.querySelector("#reset-view")?.addEventListener("click", () => sceneHandle?.reset());
     document.querySelector("#viz-retry")?.addEventListener("click", () => {
       if (state.problem) {
         state.vizError = null;
@@ -1306,7 +865,32 @@ function bindPracticeEvents(preserveVisual = false) {
   });
 }
 
-let sceneController;
+/** Active iframe controller handle from createSceneController().mount */
+let sceneHandle = null;
+
+const sceneController = createSceneController({
+  origin: SCENE_ORIGIN,
+  getPalette: vizPaletteFromCss,
+  onReady: () => hideVizLoading(),
+  onError: message => showVizError(message),
+  onStep: (step, text) => updateAnimationStep(step, text),
+  onProgress: (nextProgress, nextPlaying) => {
+    const playing = prefersReducedMotion() ? false : nextPlaying;
+    const progressInput = document.querySelector("#playback-progress");
+    const progressOut = document.querySelector("#progress-out");
+    if (Math.abs(nextProgress - state.playbackProgress) >= 0.001 || playing !== state.playing) {
+      state.playbackProgress = nextProgress;
+      state.playing = playing;
+      if (progressInput && document.activeElement !== progressInput) {
+        progressInput.value = String(state.playbackProgress);
+        syncSliderAria(progressInput, `${Math.round(state.playbackProgress * 100)} percent`);
+      }
+      if (progressOut) progressOut.textContent = `${Math.round(state.playbackProgress * 100)}%`;
+      syncPlayButton();
+    }
+  },
+  onSyncControls: () => syncSceneControls()
+});
 
 function hideVizLoading() {
   state.vizLoading = false;
@@ -1349,7 +933,6 @@ function updateAnimationStep(step, text) {
   const nextStep = step || state.animationStep;
   const nextText = text || state.animationStepText;
   if (nextStep === state.animationStep && nextText === state.animationStepText) {
-    // still refresh active styling if step buttons were rebuilt
     document.querySelectorAll(".step-item").forEach(item => {
       const active = item.dataset.step === state.animationStep;
       item.classList.toggle("active", active);
@@ -1368,36 +951,20 @@ function updateAnimationStep(step, text) {
   if (detail) detail.textContent = state.animationStepText;
 }
 
-function postToScene(payload) {
-  const frame = document.querySelector(".legacy-animation");
-  frame?.contentWindow?.postMessage({ type: "integral-studio", ...payload }, SCENE_ORIGIN);
-}
-
 function syncSceneControls() {
   if (prefersReducedMotion()) state.playing = false;
-  postToScene({ action: "setPalette", palette: vizPaletteFromCss() });
-  postToScene({ action: "setShells", value: state.slices });
-  postToScene({ action: "setSpeed", value: state.playbackSpeed });
-  postToScene({ action: "setProgress", value: state.playbackProgress });
-  postToScene({ action: state.playing ? "play" : "pause" });
+  sceneHandle?.post({ action: "setPalette", palette: vizPaletteFromCss() });
+  sceneHandle?.post({ action: "setShells", value: state.slices });
+  sceneHandle?.post({ action: "setSpeed", value: state.playbackSpeed });
+  sceneHandle?.post({ action: "setProgress", value: state.playbackProgress });
+  if (state.playing) sceneHandle?.post({ action: "play" });
+  else sceneHandle?.post({ action: "pause" });
   syncPlayButton();
 }
 
-function encodeVisualConfig(spec) {
-  const json = JSON.stringify(spec);
-  return encodeURIComponent(btoa(unescape(encodeURIComponent(json))));
-}
-
-function encodePaletteParam(palette) {
-  try {
-    return encodeURIComponent(btoa(unescape(encodeURIComponent(JSON.stringify(palette)))));
-  } catch {
-    return "";
-  }
-}
-
 function mountScene(problem) {
-  sceneController?.dispose();
+  sceneHandle?.dispose();
+  sceneHandle = null;
   const host = document.querySelector("#three-host");
   if (!host) return;
   state.animationStep = "region";
@@ -1416,7 +983,8 @@ function mountScene(problem) {
     loader.className = "viz-loading";
     loader.setAttribute("role", "status");
     loader.setAttribute("aria-live", "polite");
-    loader.innerHTML = '<span class="viz-loading-bar" aria-hidden="true"></span><span class="viz-loading-text">Loading visualization…</span>';
+    loader.innerHTML =
+      '<span class="viz-loading-bar" aria-hidden="true"></span><span class="viz-loading-text">Loading visualization…</span>';
     host.prepend(loader);
   }
   loader.setAttribute("aria-hidden", "false");
@@ -1426,7 +994,8 @@ function mountScene(problem) {
     errorEl.id = "viz-error";
     errorEl.className = "viz-error";
     errorEl.setAttribute("role", "alert");
-    errorEl.innerHTML = '<p class="viz-error-text">Couldn\'t load the visualization.</p><button type="button" id="viz-retry" class="secondary control-btn">Try again</button>';
+    errorEl.innerHTML =
+      '<p class="viz-error-text">Couldn\'t load the visualization.</p><button type="button" id="viz-retry" class="secondary control-btn">Try again</button>';
     host.append(errorEl);
     errorEl.querySelector("#viz-retry")?.addEventListener("click", () => {
       if (state.problem) mountScene(state.problem);
@@ -1435,118 +1004,33 @@ function mountScene(problem) {
   errorEl.hidden = true;
   errorEl.setAttribute("aria-hidden", "true");
 
-  const legacyModes = { area: "area", volume: "volume", centroid: "centroid", curve: "arc", surface: "surface", inertia: "inertia" };
-  const visualSpec = resolveVisualSpec(problem, { alternate: state.alternate });
-  const frame = document.createElement("iframe");
+  const legacyModes = {
+    area: "area",
+    volume: "volume",
+    centroid: "centroid",
+    curve: "arc",
+    surface: "surface",
+    inertia: "inertia"
+  };
+  const { spec: visualSpec } = materializeVisualExample(problem, { alternate: state.alternate });
   const { a = 1, b = 1, n = 1 } = problem.given || {};
   const palette = vizPaletteFromCss();
   const canvasColor = palette.canvas || "ede6d8";
-  let configParam = "";
-  if (visualSpec) {
-    try {
-      configParam = `&config=${encodeVisualConfig(visualSpec)}`;
-    } catch {
-      configParam = "";
-    }
-  }
-  const paletteParam = encodePaletteParam(palette);
   const vizLabel = visualLabel(problem);
-  frame.src = `/legacy-animation.html?example=dynamic&mode=${legacyModes[problem.visual] || "area"}&a=${a}&b=${b}&n=${n}&method=${state.alternate ? "washers" : "shells"}&shells=${state.slices}&speed=${state.playbackSpeed}&canvas=${canvasColor}${paletteParam ? `&palette=${paletteParam}` : ""}${configParam}`;
-  frame.title = vizLabel;
-  frame.tabIndex = 0;
-  frame.className = "legacy-animation";
-  frame.setAttribute("aria-label", `${vizLabel}. Interactive 3D diagram. Use the camera controls below, or focus the diagram and use arrow keys, plus/minus, and R.`);
-  host.append(frame);
 
-  let loadTimedOut = false;
-  const loadTimer = window.setTimeout(() => {
-    if (state.vizLoading) {
-      loadTimedOut = true;
-      failScene("Visualization took too long to load. Check your connection and try again.");
-    }
-  }, 8000);
-
-  const failScene = message => {
-    sceneController?.dispose();
-    showVizError(message);
-  };
-
-  const markReady = () => {
-    if (loadTimedOut && state.vizError) return;
-    window.clearTimeout(loadTimer);
-    hideVizLoading();
-  };
-
-  const onLoad = () => {
-    postToScene({ action: "setPalette", palette });
-    if (visualSpec) postToScene({ action: "setExample", spec: visualSpec });
-    syncSceneControls();
-  };
-  frame.addEventListener("load", onLoad);
-  frame.addEventListener("error", () => {
-    window.clearTimeout(loadTimer);
-    failScene("Couldn't load the visualization. Try again.");
+  sceneHandle = sceneController.mount(host, {
+    visualSpec,
+    mode: legacyModes[problem.visual] || "area",
+    a,
+    b,
+    n,
+    alternate: state.alternate,
+    shells: state.slices,
+    speed: state.playbackSpeed,
+    title: vizLabel,
+    canvasColor,
+    palette
   });
-
-  const onMessage = event => {
-    if (event.origin !== SCENE_ORIGIN) return;
-    if (event.source !== frame.contentWindow) return;
-    const data = event.data;
-    if (!data || data.type !== "integral-studio") return;
-    if (data.action === "ready" || data.action === "progress" || data.action === "step") {
-      markReady();
-    }
-    if (data.action === "error") {
-      window.clearTimeout(loadTimer);
-      const message = typeof data.message === "string" && data.message.trim()
-        ? data.message.trim().slice(0, 240)
-        : "Couldn't render the visualization.";
-      failScene(message);
-      return;
-    }
-    if (data.action === "progress") {
-      const rawProgress = Number(data.progress);
-      const nextProgress = Number.isFinite(rawProgress)
-        ? Math.min(1, Math.max(0, rawProgress))
-        : 0;
-      const nextPlaying = prefersReducedMotion() ? false : Boolean(data.playing);
-      const progressInput = document.querySelector("#playback-progress");
-      const progressOut = document.querySelector("#progress-out");
-      if (Math.abs(nextProgress - state.playbackProgress) >= 0.001 || nextPlaying !== state.playing) {
-        state.playbackProgress = nextProgress;
-        state.playing = nextPlaying;
-        if (progressInput && document.activeElement !== progressInput) {
-          progressInput.value = String(state.playbackProgress);
-          syncSliderAria(progressInput, `${Math.round(state.playbackProgress * 100)} percent`);
-        }
-        if (progressOut) progressOut.textContent = `${Math.round(state.playbackProgress * 100)}%`;
-        syncPlayButton();
-      }
-      return;
-    }
-    if (data.action === "step") {
-      const step = typeof data.step === "string" ? data.step.slice(0, 32) : undefined;
-      const text = typeof data.text === "string" ? data.text.slice(0, 240) : undefined;
-      updateAnimationStep(step, text);
-    }
-  };
-  window.addEventListener("message", onMessage);
-
-  sceneController = {
-    dispose: () => {
-      window.clearTimeout(loadTimer);
-      window.removeEventListener("message", onMessage);
-      frame.removeEventListener("load", onLoad);
-      frame.remove();
-      sceneController = null;
-    },
-    reset: () => postToScene({ action: "resetView" }),
-    post: postToScene
-  };
-}
-
-function rebuildVisual() {
-  mountScene(state.problem);
 }
 
 function render(options) {
@@ -1558,7 +1042,7 @@ window.matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change",
   if (!event.matches) return;
   state.playing = false;
   syncPlayButton();
-  postToScene({ action: "pause" });
+  sceneHandle?.post({ action: "pause" });
 });
 
 loadProgress();

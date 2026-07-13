@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Generate 50 Briggs/OpenStax problems per topic with sympy answers."""
+"""Generate 50 Briggs/OpenStax problems per topic with sympy answers.
+
+Visual contract (architecture):
+  Each problem's `visualParams` (or eventual full visualSpec) is the *authoritative*
+  serializable curve/method description. Runtime JS materializes via
+  `materializeVisualExample` and only runs regex repair as a compatibility layer.
+  Prefer emitting complete curve types from SUPPORTED_CURVE_TYPES in visualSpecs.js
+  so runtime repair can shrink over time.
+"""
 
 from __future__ import annotations
 
