@@ -392,22 +392,7 @@ button:not(:disabled), select, input { cursor: pointer; }
   min-width: 0;
 }
 
-.visual-head.compact h2 {
-  margin: 0;
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: 42%;
-  font-family: var(--font-ui);
-  font-size: 0.875rem;
-  font-weight: 700;
-  color: var(--ink);
-  letter-spacing: 0.01em;
-  line-height: 1.3;
-  text-transform: none;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+
 
 .visual-camera-hint {
   flex: 0 0 auto;
@@ -902,34 +887,6 @@ button:not(:disabled), select, input { cursor: pointer; }
   opacity: .62;
   cursor: not-allowed;
 }
-
-.feedback {
-  margin-top: 14px;
-  padding: 12px 14px;
-  border-radius: var(--radius-sm);
-  border: 1px solid transparent;
-  font-family: var(--font-ui);
-  font-size: 1.0625rem;
-  line-height: 1.5;
-  color: var(--ink);
-}
-
-/* Keep feedback above the fold after Check */
-.problem-panel .feedback {
-  scroll-margin-top: 64px;
-}
-
-.feedback.positive {
-  background: var(--teal-soft);
-  border-color: color-mix(in srgb, var(--teal) 22%, var(--line));
-}
-.feedback.negative {
-  background: var(--red-soft);
-  border-color: color-mix(in srgb, var(--red) 20%, var(--line));
-}
-.feedback-message { margin: 0; }
-.feedback.positive .feedback-message strong { color: var(--teal); font-weight: 700; }
-.feedback.negative .feedback-message strong { color: var(--red); font-weight: 700; }
 
 .sr-only {
   position: absolute;
@@ -1461,13 +1418,6 @@ button:not(:disabled), select, input { cursor: pointer; }
   .visual-head-row {
     flex-wrap: wrap;
     row-gap: 6px;
-  }
-
-  .visual-head.compact h2 {
-    max-width: calc(100% - 44px);
-    white-space: normal;
-    overflow: visible;
-    text-overflow: unset;
   }
 
   .step-track {

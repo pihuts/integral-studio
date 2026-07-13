@@ -204,8 +204,6 @@ function applyDualMethodUi(problem) {
     btn.classList.toggle("selected", selected);
     btn.setAttribute("aria-pressed", String(selected));
   });
-  const title = document.querySelector("#visual-title");
-  if (title) title.textContent = visualLabel(problem);
   const track = document.querySelector(".step-track");
   if (track) {
     track.outerHTML = renderStepTrack(state.animationStep, problem);
@@ -593,10 +591,9 @@ function renderPractice(options = {}) {
     <div class="app-shell">
       <main class="workspace">
         <div class="content-grid">
-          <section class="visual-panel" aria-labelledby="visual-title">
+          <section class="visual-panel" aria-label="${escape(visualLabel(p))}">
             <div class="visual-head compact">
               <div class="visual-head-row">
-                <h2 id="visual-title">${escape(visualLabel(p))}</h2>
                 ${renderStepTrack(state.animationStep, p)}
                 <button type="button" id="camera-hint" class="visual-camera-hint" title="${escape(cameraControlHint())}" aria-label="${escape(cameraControlHint())}">?</button>
               </div>
@@ -631,7 +628,7 @@ function renderPractice(options = {}) {
               <span class="question-index">Q${state.questionIndex + 1}</span>
             </div>
             <h1 id="question-title">${richMath(p.prompt)}</h1>
-            <div class="choices" role="radiogroup" aria-labelledby="question-title"${state.checked ? ' aria-describedby="question-feedback"' : ""}>
+            <div class="choices" role="radiogroup" aria-labelledby="question-title">
               ${p.choices
                 .map((option, index) => {
                   const isCorrect = state.checked && option.id === p.correctId;
@@ -658,19 +655,6 @@ function renderPractice(options = {}) {
                 })
                 .join("")}
             </div>
-            ${
-              state.checked
-                ? `
-              <div class="feedback ${correct ? "positive" : "negative"}" id="question-feedback" role="status" aria-live="polite">
-                <p class="feedback-message"><strong>${correct ? "Correct" : "Incorrect"}</strong> — ${
-                  correct
-                    ? "Visualization and worked solution below."
-                    : "Correct choice highlighted. Visualization and steps below."
-                }</p>
-              </div>
-            `
-                : ""
-            }
             <div class="question-actions">
               ${
                 state.checked
@@ -697,12 +681,11 @@ function renderPractice(options = {}) {
 
   if (state.showSolution) {
     requestAnimationFrame(() => {
-      const feedback = document.querySelector("#question-feedback");
       const visual = document.querySelector(".visual-panel");
       const panel = document.querySelector("#solution-panel");
-      // Compact: stay on feedback so flow is problem → viz → sol while scrolling.
-      // Desktop: keep choice/feedback in view; solution sits under the problem column.
-      const target = isCompactViewport() ? feedback || visual : feedback || panel;
+      // Compact: prefer viz so flow is problem → viz → sol while scrolling.
+      // Desktop: keep solution under the problem column in view.
+      const target = isCompactViewport() ? visual : panel;
       if (target) {
         target.scrollIntoView({
           behavior: isCompactViewport() ? "auto" : motion,
