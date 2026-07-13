@@ -16,7 +16,7 @@ for (const topic of Object.keys(GENERATED_BANK)) {
     : "tiered";
   const pool = briggsProblemCount(topic);
   const cov = conceptCoverage(topic);
-  const minConcepts = topic === "applications" ? 40 : 10;
+  const minConcepts = topic === "applications" ? 40 : 30;
   const ok = pool >= QUESTIONS_PER_TOPIC && cov.conceptCount >= minConcepts;
   if (!ok) failed = true;
   console.log(
@@ -24,6 +24,6 @@ for (const topic of Object.keys(GENERATED_BANK)) {
   );
 }
 if (failed) {
-  console.error("\nSome topics are below 50 problems or the concept minimum (10; applications ≥40).");
+  console.error("\nSome topics are below 50 problems or the concept minimum (30; applications ≥40).");
   process.exit(1);
 }

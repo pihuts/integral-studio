@@ -3090,9 +3090,9 @@ def custom_problem(source, title, prompt, answer, setup, visual, difficulty, vis
 
 
 def catalog_area_varied():
-    """12 distinct area concepts (incl. horizontal strips); 20 easy / 20 medium / 10 hard."""
+    """30 distinct area concepts (incl. horizontal strips); 20 easy / 20 medium / 10 hard."""
     out = []
-    N_AREA = 14
+    N_AREA = 30
     for i in range(PER_TOPIC):
         case = i % N_AREA
         diff = difficulty_for_index(i)
@@ -3412,10 +3412,9 @@ def catalog_area_varied():
                 "equations": equations_kit("area", setup),
             })
             continue
-        else:
-            # Horizontal strips: between x = y and x = m (line) / parabola-friendly
+        elif case == 11:
+            # Horizontal strips: between x = y^2 and x = m y
             m = 2 + tier + rep
-            # region: x = y^2 (left) and x = m y (right) from y=0 to y=m
             left_x = y**2
             right_x = m * y
             hi = m
@@ -3439,9 +3438,8 @@ def catalog_area_varied():
                 "left": {"t": "pow", "a": 1, "n": 2},
                 "right": {"t": "lin", "a": m},
                 "bottom": {"t": "c", "v": 0},
-                "top": {"t": "lin", "a": m},  # y = x/m vertical view of same enclosure with y=x^2
+                "top": {"t": "lin", "a": m},
             }
-            # also valid as vertical: between y=x/m and y=√x — keep horizontal setup primary
             compute = {
                 "expr": width, "a": 0, "b": hi, "var": y, "label": "A",
                 "parts": {
@@ -3451,6 +3449,305 @@ def catalog_area_varied():
                 },
                 "display_integrand": f"{m}y-y^{{2}}",
             }
+        elif case == 14:
+            # Area under an exponential
+            a = 1 + tier
+            hi = 1 + tier + rep
+            f = sp.exp(a * x)
+            val = sp.integrate(f, (x, 0, hi))
+            prompt = f"Find the area under \\(y=e^{{{a}x}}\\) on \\([0,{hi}]\\)."
+            setup = f"\\[A=\\int_0^{{{hi}}}e^{{{a}x}}\\,dx\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": hi, "bottom": {"t": "c", "v": 0}, "top": {"t": "exp", "s": 1, "a": a}}
+            compute = {
+                "expr": f, "a": 0, "b": hi, "label": "A",
+                "parts": {"top": expr_latex(f), "bottom": "0", "height": expr_latex(f), "var": "x"},
+            }
+        elif case == 15:
+            # Area under cosine (nonnegative interval)
+            c = 1 + tier + rep
+            f = c * sp.cos(x)
+            val = sp.integrate(f, (x, 0, sp.pi / 2))
+            prompt = f"Find the area under \\(y={c}\\cos x\\) on \\([0,\\pi/2]\\)."
+            setup = f"\\[A=\\int_0^{{\\pi/2}}{c}\\cos x\\,dx\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": 1.5708, "bottom": {"t": "c", "v": 0}, "top": {"t": "sin", "a": c, "b": 0}}
+            compute = {
+                "expr": f, "a": 0, "b": sp.pi / 2, "label": "A",
+                "parts": {"top": expr_latex(f), "bottom": "0", "height": expr_latex(f), "var": "x"},
+            }
+        elif case == 16:
+            # Area between cubic and line
+            m = 2 + tier + rep
+            top = m * x
+            bot = x**3
+            hi = sp.sqrt(m) if m > 0 else 1
+            # intersections of y=mx and y=x^3 at 0 and ±√m — use first quadrant
+            hi = sp.sqrt(sp.Integer(m))
+            val = sp.integrate(top - bot, (x, 0, hi))
+            prompt = f"Find the area enclosed by \\(y={m}x\\) and \\(y=x^3\\) in the first quadrant."
+            setup = f"Intersections at \\(x=0\\) and \\(x=\\sqrt{{{m}}}\\): \\[A=\\int_0^{{\\sqrt{{{m}}}}}({m}x-x^3)\\,dx\\]"
+            vp = {
+                "method": "area", "xMin": 0, "xMax": float(sp.N(hi)),
+                "bottom": {"t": "pow", "a": 1, "n": 3}, "top": {"t": "lin", "a": m},
+            }
+            compute = {
+                "expr": top - bot, "a": 0, "b": hi, "label": "A",
+                "parts": {"top": f"{m}x", "bottom": "x^3", "height": f"{m}x-x^3", "var": "x"},
+            }
+        elif case == 17:
+            # Area under constant (rectangle geometry check)
+            h = 3 + tier + rep
+            w = 2 + tier
+            val = h * w
+            prompt = f"Find the area under \\(y={h}\\) on \\([0,{w}]\\)."
+            setup = f"\\[A=\\int_0^{{{w}}}{h}\\,dx\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": w, "bottom": {"t": "c", "v": 0}, "top": {"t": "c", "v": h}}
+            compute = {
+                "expr": sp.Integer(h), "a": 0, "b": w, "label": "A",
+                "parts": {"top": str(h), "bottom": "0", "height": str(h), "var": "x"},
+            }
+        elif case == 18:
+            # Area under |x| style piecewise absolute value on [-a,a]
+            a = 2 + tier + rep
+            val = a * a  # 2 * ∫_0^a x dx = a^2
+            prompt = f"Find the total area under \\(y=|x|\\) on \\([{-a},{a}]\\)."
+            setup = f"Split at 0: \\[A=\\int_{{-{a}}}^0(-x)\\,dx+\\int_0^{{{a}}}x\\,dx\\]"
+            steps = [
+                step("Strategy: absolute value", "Split where the formula changes: \\(y=-x\\) for \\(x<0\\) and \\(y=x\\) for \\(x\\ge0\\)."),
+                step("Left half", f"\\[\\int_{{-{a}}}^0(-x)\\,dx={nice_latex(sp.integrate(-x, (x, -a, 0)))}\\]"),
+                step("Right half", f"\\[\\int_0^{{{a}}}x\\,dx={nice_latex(sp.integrate(x, (x, 0, a)))}\\]"),
+                step("Total area", f"\\[A={nice_latex(val)}\\]"),
+            ]
+            ans = f"A = {nice_latex(val)}"
+            out.append({
+                "source": source, "title": "Area", "prompt": prompt,
+                "choices": mc_choices(ans, f"A = {nice_latex(2 * val)}", f"A = 0", f"A = {nice_latex(val / 2)}"),
+                "steps": steps, "finalAnswer": ans,
+                "insight": "Absolute-value graphs require a split at the corner; each piece is ordinary area.",
+                "visual": "area", "difficulty": diff,
+                "visualParams": {
+                    "method": "area", "xMin": -a, "xMax": a, "bottom": {"t": "c", "v": 0},
+                    "top": {
+                        "t": "piecewise",
+                        "segments": [
+                            {"min": -a, "max": 0, "curve": {"t": "lin", "a": -1}},
+                            {"min": 0, "max": a, "curve": {"t": "lin", "a": 1}},
+                        ],
+                    },
+                },
+                "equations": equations_kit("area", setup),
+            })
+            continue
+        elif case == 19:
+            # Area under ln x
+            lo = 1
+            hi = sp.E if tier == 0 else (3 + rep if tier == 1 else 4)
+            f = sp.log(x)
+            # ln x is negative on (0,1); use [1, hi] so area is positive under the curve above axis
+            val = sp.integrate(f, (x, lo, hi))
+            prompt = f"Find the area under \\(y=\\ln x\\) on \\([{lo},{sp.latex(hi)}]\\)."
+            setup = f"\\[A=\\int_{{{lo}}}^{{{sp.latex(hi)}}}\\ln x\\,dx\\]"
+            vp = {"method": "area", "xMin": lo, "xMax": float(sp.N(hi)), "bottom": {"t": "c", "v": 0}, "top": {"t": "log", "a": 1}}
+            compute = {
+                "expr": f, "a": lo, "b": hi, "label": "A",
+                "parts": {"top": "\\ln x", "bottom": "0", "height": "\\ln x", "var": "x"},
+            }
+        elif case == 20:
+            # Area between e^x and a horizontal line
+            c = 1 + tier
+            # e^x = c at x = ln c; need c > 1
+            c = 2 + tier + rep
+            lo = 0
+            hi = sp.log(c)
+            top = sp.Integer(c)
+            bot = sp.exp(x)
+            val = sp.integrate(top - bot, (x, lo, hi))
+            prompt = f"Find the area between \\(y={c}\\) and \\(y=e^x\\) from \\(x=0\\) to their intersection."
+            setup = f"Intersection at \\(x=\\ln {c}\\): \\[A=\\int_0^{{\\ln {c}}}({c}-e^x)\\,dx\\]"
+            vp = {
+                "method": "area", "xMin": 0, "xMax": float(sp.N(hi)),
+                "bottom": {"t": "exp", "s": 1, "a": 1}, "top": {"t": "c", "v": c},
+            }
+            compute = {
+                "expr": top - bot, "a": lo, "b": hi, "label": "A",
+                "parts": {"top": str(c), "bottom": "e^x", "height": f"{c}-e^x", "var": "x"},
+            }
+        elif case == 21:
+            # Area of triangle via integral (vertices known)
+            b = 3 + tier + rep
+            h = 2 + tier
+            f = h * (1 - x / b)
+            val = sp.integrate(f, (x, 0, b))
+            prompt = f"Find the area of the triangle under \\(y={h}(1-x/{b})\\) on \\([0,{b}]\\) using a definite integral."
+            setup = f"\\[A=\\int_0^{{{b}}}{h}\\left(1-\\frac{{x}}{{{b}}}\\right)\\,dx\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": b, "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": -h / b, "b": h}}
+            compute = {
+                "expr": f, "a": 0, "b": b, "label": "A",
+                "parts": {"top": expr_latex(f), "bottom": "0", "height": expr_latex(f), "var": "x"},
+            }
+        elif case == 22:
+            # Area between two lines
+            m1 = 2 + tier
+            m2 = 1 + rep
+            # y = m1 - m2 x and y = m2 x, intersection
+            # Use y=x and y = c - x
+            c = 4 + tier + rep
+            top = c - x
+            bot = x
+            hi = c / 2
+            val = sp.integrate(top - bot, (x, 0, hi))
+            prompt = f"Find the area enclosed by \\(y={c}-x\\), \\(y=x\\), and \\(x=0\\)."
+            setup = f"\\[A=\\int_0^{{{sp.latex(hi)}}}\\big(({c}-x)-x\\big)\\,dx\\]"
+            vp = {
+                "method": "area", "xMin": 0, "xMax": float(hi),
+                "bottom": {"t": "lin", "a": 1}, "top": {"t": "lin", "a": -1, "b": c},
+            }
+            compute = {
+                "expr": top - bot, "a": 0, "b": hi, "label": "A",
+                "parts": {"top": f"{c}-x", "bottom": "x", "height": f"{c}-2x", "var": "x"},
+            }
+        elif case == 23:
+            # Area under 1/√x on [1, b]
+            b = 4 + tier + rep
+            f = 1 / sp.sqrt(x)
+            val = sp.integrate(f, (x, 1, b))
+            prompt = f"Find the area under \\(y=\\dfrac{{1}}{{\\sqrt{{x}}}}\\) on \\([1,{b}]\\)."
+            setup = f"\\[A=\\int_1^{{{b}}}x^{{-1/2}}\\,dx\\]"
+            vp = {"method": "area", "xMin": 1, "xMax": b, "bottom": {"t": "c", "v": 0}, "top": {"t": "pow", "a": 1, "n": -0.5}}
+            compute = {
+                "expr": f, "a": 1, "b": b, "label": "A",
+                "parts": {"top": "x^{-1/2}", "bottom": "0", "height": "x^{-1/2}", "var": "x"},
+            }
+        elif case == 24:
+            # Horizontal strips: line x = c - y and parabola x = y^2
+            c = 4 + tier + rep
+            # y^2 = c - y → y^2 + y - c = 0; pick c so nice roots
+            # Simpler: x = y (left) and x = 2 (right) from y=0 to y=2
+            hi = 2 + tier
+            right = 2 + tier + rep
+            left = y
+            width = right - left
+            val = sp.integrate(width, (y, 0, hi))
+            prompt = (
+                f"Use horizontal strips to find the area bounded by "
+                f"\\(x=y\\), \\(x={right}\\), \\(y=0\\), and \\(y={hi}\\)."
+            )
+            setup = f"\\[A=\\int_0^{{{hi}}}({right}-y)\\,dy\\]"
+            vp = {
+                "method": "area", "orientation": "horizontal",
+                "yMin": 0, "yMax": hi, "xMin": 0, "xMax": right,
+                "left": {"t": "lin", "a": 1}, "right": {"t": "c", "v": right},
+                "bottom": {"t": "c", "v": 0}, "top": {"t": "c", "v": hi},
+            }
+            compute = {
+                "expr": width, "a": 0, "b": hi, "var": y, "label": "A",
+                "parts": {
+                    "right": str(right), "left": "y", "width": f"{right}-y",
+                    "height": f"{right}-y", "var": "y", "lo": 0, "hi": hi,
+                    "orientation": "horizontal",
+                },
+                "display_integrand": f"{right}-y",
+            }
+        elif case == 25:
+            # Area under poly that dips? keep nonnegative: y = x^2 + c
+            c = 1 + tier + rep
+            hi = 2 + tier
+            f = x**2 + c
+            val = sp.integrate(f, (x, 0, hi))
+            prompt = f"Find the area under \\(y=x^2+{c}\\) on \\([0,{hi}]\\)."
+            setup = f"\\[A=\\int_0^{{{hi}}}(x^2+{c})\\,dx\\]"
+            vp = {"method": "area", "xMin": 0, "xMax": hi, "bottom": {"t": "c", "v": 0}, "top": {"t": "poly", "k": [c, 0, 1]}}
+            compute = {
+                "expr": f, "a": 0, "b": hi, "label": "A",
+                "parts": {"top": expr_latex(f), "bottom": "0", "height": expr_latex(f), "var": "x"},
+            }
+        elif case == 26:
+            # Area between sin and cos on [0, π/4]
+            f = sp.cos(x) - sp.sin(x)
+            val = sp.integrate(f, (x, 0, sp.pi / 4))
+            prompt = "Find the area between \\(y=\\cos x\\) and \\(y=\\sin x\\) on \\([0,\\pi/4]\\)."
+            setup = "\\[A=\\int_0^{\\pi/4}(\\cos x-\\sin x)\\,dx\\]"
+            vp = {
+                "method": "area", "xMin": 0, "xMax": 0.7854,
+                "bottom": {"t": "sin", "a": 1, "b": 0}, "top": {"t": "sin", "a": 1, "b": 0},
+            }
+            compute = {
+                "expr": f, "a": 0, "b": sp.pi / 4, "label": "A",
+                "parts": {"top": "\\cos x", "bottom": "\\sin x", "height": "\\cos x-\\sin x", "var": "x"},
+            }
+        elif case == 27:
+            # Region under top=const, bottom=parabola
+            h = 4 + tier + rep
+            # y = h - x^2 above y = 0 already case 1; here between y=h and y=x^2
+            hi = int(sp.sqrt(h)) if h >= 1 else 1
+            # ensure x^2 <= h on [0, hi]
+            while hi * hi > h:
+                hi -= 1
+            if hi < 1:
+                hi = 1
+                h = hi * hi + 1 + tier
+            top = sp.Integer(h)
+            bot = x**2
+            val = sp.integrate(top - bot, (x, 0, hi))
+            prompt = f"Find the area between \\(y={h}\\) and \\(y=x^2\\) on \\([0,{hi}]\\)."
+            setup = f"\\[A=\\int_0^{{{hi}}}({h}-x^2)\\,dx\\]"
+            vp = {
+                "method": "area", "xMin": 0, "xMax": hi,
+                "bottom": {"t": "pow", "a": 1, "n": 2}, "top": {"t": "c", "v": h},
+            }
+            compute = {
+                "expr": top - bot, "a": 0, "b": hi, "label": "A",
+                "parts": {"top": str(h), "bottom": "x^2", "height": f"{h}-x^2", "var": "x"},
+            }
+        elif case == 28:
+            # Area on a negative-x interval (still geometric area)
+            lo, hi = -(3 + tier), -(1 + rep) if (1 + rep) < (3 + tier) else -1
+            if lo >= hi:
+                lo, hi = -4, -1
+            f = (2 + tier) - x  # positive on negative x
+            # ensure positive: for x negative, 2-x is larger
+            f = (4 + tier) + x  # on [-3,-1] if tier=0: 4+x in [1,3]
+            lo, hi = -(3 + tier + rep), -1
+            f = (5 + tier) + x
+            val = sp.integrate(f, (x, lo, hi))
+            prompt = f"Find the area under \\(y={expr_latex(f)}\\) on \\([{lo},{hi}]\\)."
+            setup = f"\\[A=\\int_{{{lo}}}^{{{hi}}}({expr_latex(f)})\\,dx\\]"
+            vp = {
+                "method": "area", "xMin": lo, "xMax": hi,
+                "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": 1, "b": 5 + tier},
+            }
+            compute = {
+                "expr": f, "a": lo, "b": hi, "label": "A",
+                "parts": {"top": expr_latex(f), "bottom": "0", "height": expr_latex(f), "var": "x"},
+            }
+        else:
+            # case 29: average height interpretation / area then divide
+            hi = 2 + tier + rep
+            f = (1 + tier) * x + 1
+            area = sp.integrate(f, (x, 0, hi))
+            avg_h = sp.simplify(area / hi)
+            prompt = (
+                f"The region under \\(y={expr_latex(f)}\\) on \\([0,{hi}]\\) has area \\(A\\). "
+                f"Find the average height \\(A/{hi}\\)."
+            )
+            setup = f"\\[A=\\int_0^{{{hi}}}({expr_latex(f)})\\,dx,\\quad h_{{\\mathrm{{avg}}}}=A/{hi}\\]"
+            ans = f"h_{{\\mathrm{{avg}}}} = {nice_latex(avg_h)}"
+            steps = [
+                step("Compute the area", f"\\[A=\\int_0^{{{hi}}}({expr_latex(f)})\\,dx={nice_latex(area)}\\]"),
+                step("Average height", f"\\[h_{{\\mathrm{{avg}}}}=\\frac{{A}}{{{hi}}}={nice_latex(avg_h)}\\]"),
+            ]
+            out.append({
+                "source": source, "title": "Area", "prompt": prompt,
+                "choices": mc_choices(ans, f"{nice_latex(area)}", f"{nice_latex(2 * avg_h)}", f"{nice_latex(avg_h / 2)}"),
+                "steps": steps, "finalAnswer": ans,
+                "insight": "Average height equals area divided by width — the same idea as average value of a function.",
+                "visual": "area", "difficulty": diff,
+                "visualParams": {
+                    "method": "area", "xMin": 0, "xMax": hi,
+                    "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": 1 + tier, "b": 1},
+                },
+                "equations": equations_kit("area", setup),
+            })
+            continue
         out.append(custom_problem(
             source, "Area", prompt, f"A = {sp.latex(sp.simplify(val))}", setup, "area", diff, vp,
             "Area is accumulated strip length × thickness. Vertical strips use (top − bottom) dx; horizontal strips use (right − left) dy.",
@@ -3460,9 +3757,9 @@ def catalog_area_varied():
 
 
 def catalog_volumes_varied():
-    """12 distinct volume methods incl. horizontal (dy) slices; 20/20/10 difficulty."""
+    """30 distinct volume methods incl. horizontal (dy) slices; 20/20/10 difficulty."""
     out = []
-    N_VOL = 12
+    N_VOL = 30
     for i in range(PER_TOPIC):
         case = i % N_VOL
         diff = difficulty_for_index(i)
@@ -3731,16 +4028,10 @@ def catalog_volumes_varied():
                 "display_integrand": f"({r_tex})^{{2}}", "setup_display": setup, "keep_scale_inside": True,
                 "parts": {"R": r_tex, "var": "y", "lo": 0, "hi": hi},
             }
-        else:
-            # Horizontal washers / shells about x-axis with dy: region between x=y and x=√y style
-            # Region: y = x and y = x^2 on [0,1] → with dy: x_right = √y, x_left = y
-            # About x-axis with shells (horizontal strips // x-axis): r = y, h = √y - y
+        elif case == 11:
+            # Horizontal shells about x-axis: y=x and y=x^2
             hi = 1
             height = sp.sqrt(y) - y
-            if tier >= 1:
-                # scale: between y = x/m and y = x^2 → x = m y and x = √y, intersections 0 and 1/m^2? 
-                # Keep classic y=x, y=x^2 about x-axis with horizontal shells
-                pass
             ans = 2 * sp.pi * sp.integrate(y * height, (y, 0, hi))
             prompt = (
                 "Use horizontal cylindrical shells to rotate the region between "
@@ -3768,6 +4059,369 @@ def catalog_volumes_varied():
                 "expr": y * height, "a": 0, "b": hi, "var": y, "label": "V", "scale": 2 * sp.pi,
                 "display_integrand": "y(\\sqrt{y}-y)", "setup_display": setup, "keep_scale_inside": True,
                 "parts": {"r": "y", "h": "\\sqrt{y}-y", "var": "y", "lo": 0, "hi": hi},
+            }
+        elif case == 12:
+            # Washer about y = h
+            h_axis = 3 + tier + rep
+            f = x**2
+            hi = 1
+            outer = h_axis
+            inner_r = h_axis - f
+            ans = sp.pi * sp.integrate(outer**2 - (h_axis - f) ** 2, (x, 0, hi))
+            # Actually region under y=x^2 about y=h_axis with washers: only one radius if rotating under curve to axis...
+            # Region between y=0 and y=x^2 about y=h: outer R = h, inner r = h - x^2
+            ans = sp.pi * sp.integrate(h_axis**2 - (h_axis - f) ** 2, (x, 0, hi))
+            prompt = (
+                f"Use washers to rotate the region under \\(y=x^2\\) on \\([0,{hi}]\\) "
+                f"about the line \\(y={h_axis}\\)."
+            )
+            setup = f"\\[V=\\pi\\int_0^{{{hi}}}\\big[{h_axis}^2-({h_axis}-x^2)^2\\big]\\,dx\\]"
+            vp = {
+                "method": "washer-x", "xMin": 0, "xMax": hi, "axisY": h_axis, "axisLabel": f"y = {h_axis}",
+                "bottom": {"t": "c", "v": 0}, "top": {"t": "pow", "a": 1, "n": 2},
+            }
+            compute = {
+                "expr": h_axis**2 - (h_axis - f) ** 2, "a": 0, "b": hi, "label": "V", "scale": sp.pi,
+                "display_integrand": f"{h_axis}^{{2}}-({h_axis}-x^{{2}})^{{2}}",
+                "setup_display": setup, "keep_scale_inside": True,
+                "parts": {"R_out": str(h_axis), "R_in": f"{h_axis}-x^{{2}}", "var": "x", "lo": 0, "hi": hi},
+            }
+        elif case == 13:
+            # Cone from line about x-axis
+            m = 1 + tier
+            c = 0
+            f = m * x + (1 + rep)
+            hi = 2
+            ans = sp.pi * sp.integrate(f**2, (x, 0, hi))
+            prompt = f"Rotate the line \\(y={expr_latex(f)}\\) on \\([0,{hi}]\\) about the \\(x\\)-axis (disk / cone frustum)."
+            setup = f"\\[V=\\pi\\int_0^{{{hi}}}({expr_latex(f)})^2\\,dx\\]"
+            vp = {
+                "method": "disk-x", "xMin": 0, "xMax": hi, "axisY": 0, "axisLabel": "y = 0",
+                "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": m, "b": 1 + rep},
+            }
+            compute = {
+                "expr": f**2, "a": 0, "b": hi, "label": "V", "scale": sp.pi,
+                "display_integrand": f"({expr_latex(f)})^{{2}}", "setup_display": setup, "keep_scale_inside": True,
+                "parts": {"R": expr_latex(f), "var": "x", "lo": 0, "hi": hi},
+            }
+        elif case == 14:
+            # Equilateral triangle cross sections
+            hi = 2 + tier
+            s = (1 + rep) * sp.sqrt(x) + 1
+            s_tex = expr_latex(s)
+            # Area of equilateral triangle with side s: (√3/4) s^2
+            ans = (sp.sqrt(3) / 4) * sp.integrate(s**2, (x, 0, hi))
+            prompt = (
+                f"The base of a solid is the region under \\(y={s_tex}\\) on \\([0,{hi}]\\). "
+                f"Cross sections perpendicular to the \\(x\\)-axis are equilateral triangles. Find the volume."
+            )
+            setup = f"\\[V=\\int_0^{{{hi}}}\\frac{{\\sqrt{{3}}}}{{4}}({s_tex})^2\\,dx\\]"
+            vp = {
+                "method": "cross-square", "xMin": 0, "xMax": hi,
+                "bottom": {"t": "c", "v": 0}, "top": {"t": "sqrt", "a": 1 + rep, "b": 1},
+                "sampleLabel": "sample x", "measureLabel": "triangle side",
+            }
+            compute = {
+                "expr": s**2, "a": 0, "b": hi, "label": "V", "scale": sp.sqrt(3) / 4,
+                "display_integrand": f"({s_tex})^{{2}}", "setup_display": setup, "keep_scale_inside": True,
+                "parts": {"s": s_tex, "var": "x", "lo": 0, "hi": hi},
+            }
+        elif case == 15:
+            # Shell under sqrt about y-axis
+            a = 1 + tier + rep
+            hi = 4
+            f = a * sp.sqrt(x)
+            ans = 2 * sp.pi * sp.integrate(x * f, (x, 0, hi))
+            prompt = f"Use shells to rotate the region under \\(y={expr_latex(f)}\\) on \\([0,{hi}]\\) about the \\(y\\)-axis."
+            setup = f"\\[V=2\\pi\\int_0^{{{hi}}}x({expr_latex(f)})\\,dx\\]"
+            vp = {
+                "method": "shell-y", "xMin": 0, "xMax": hi, "axisX": 0, "axisLabel": "x = 0",
+                "bottom": {"t": "c", "v": 0}, "top": {"t": "sqrt", "a": a},
+            }
+            compute = {
+                "expr": x * f, "a": 0, "b": hi, "label": "V", "scale": 2 * sp.pi,
+                "display_integrand": f"x({expr_latex(f)})", "setup_display": setup, "keep_scale_inside": True,
+                "parts": {"r": "x", "h": expr_latex(f), "var": "x", "lo": 0, "hi": hi},
+            }
+        elif case == 16:
+            # Disk of y = e^{-x} about x-axis
+            hi = 1 + tier
+            f = sp.exp(-x)
+            ans = sp.pi * sp.integrate(f**2, (x, 0, hi))
+            prompt = f"Rotate \\(y=e^{{-x}}\\) on \\([0,{hi}]\\) about the \\(x\\)-axis."
+            setup = f"\\[V=\\pi\\int_0^{{{hi}}}e^{{-2x}}\\,dx\\]"
+            vp = {
+                "method": "disk-x", "xMin": 0, "xMax": hi, "axisY": 0, "axisLabel": "y = 0",
+                "bottom": {"t": "c", "v": 0}, "top": {"t": "exp", "s": 1, "a": -1},
+            }
+            compute = {
+                "expr": f**2, "a": 0, "b": hi, "label": "V", "scale": sp.pi,
+                "display_integrand": "e^{-2x}", "setup_display": setup, "keep_scale_inside": True,
+                "parts": {"R": "e^{-x}", "var": "x", "lo": 0, "hi": hi},
+            }
+        elif case == 17:
+            # Rectangular cross sections with fixed height
+            hi = 3 + tier
+            s = 2 + rep  # base side from curve height? use side = 2+x
+            side = (1 + rep) + x
+            height_rect = 1 + tier
+            ans = sp.integrate(side * height_rect, (x, 0, hi))
+            prompt = (
+                f"Cross sections perpendicular to the \\(x\\)-axis on \\([0,{hi}]\\) are rectangles "
+                f"with base \\({expr_latex(side)}\\) and fixed height \\({height_rect}\\). Find the volume."
+            )
+            setup = f"\\[V=\\int_0^{{{hi}}}({expr_latex(side)})({height_rect})\\,dx\\]"
+            vp = {
+                "method": "cross-square", "xMin": 0, "xMax": hi,
+                "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": 1, "b": 1 + rep},
+            }
+            compute = {
+                "expr": side * height_rect, "a": 0, "b": hi, "label": "V",
+                "display_integrand": f"({expr_latex(side)})({height_rect})", "setup_display": setup,
+                "parts": {"s": expr_latex(side), "var": "x", "lo": 0, "hi": hi},
+            }
+        elif case == 18:
+            # Shell about x = a (a to the right of region)
+            axis = 3 + tier + rep
+            f = 4 - x**2
+            hi = 2
+            # region under y=4-x^2 from 0 to 2, about x=axis ≥ 2
+            ans = 2 * sp.pi * sp.integrate((axis - x) * f, (x, 0, hi))
+            prompt = (
+                f"Use shells to rotate the region under \\(y=4-x^2\\) on \\([0,{hi}]\\) "
+                f"about the line \\(x={axis}\\)."
+            )
+            setup = f"\\[V=2\\pi\\int_0^{{{hi}}}({axis}-x)(4-x^2)\\,dx\\]"
+            vp = {
+                "method": "shell-y", "xMin": 0, "xMax": hi, "axisX": axis, "axisLabel": f"x = {axis}",
+                "bottom": {"t": "c", "v": 0}, "top": {"t": "poly", "k": [4, 0, -1]},
+            }
+            compute = {
+                "expr": (axis - x) * f, "a": 0, "b": hi, "label": "V", "scale": 2 * sp.pi,
+                "display_integrand": f"({axis}-x)(4-x^{{2}})", "setup_display": setup, "keep_scale_inside": True,
+                "parts": {"r": f"{axis}-x", "h": "4-x^{2}", "var": "x", "lo": 0, "hi": hi},
+            }
+        elif case == 19:
+            # Washer about y-axis with dy: region between x=y and x=2
+            hi = 2
+            outer = 2
+            inner = y
+            ans = sp.pi * sp.integrate(outer**2 - inner**2, (y, 0, hi))
+            prompt = (
+                "Use horizontal washers to rotate the region bounded by \\(x=y\\), \\(x=2\\), "
+                "and \\(y=0\\) about the \\(y\\)-axis."
+            )
+            setup = f"\\[V=\\pi\\int_0^{{{hi}}}\\big(2^2-y^2\\big)\\,dy\\]"
+            vp = {
+                "method": "washer-y", "orientation": "horizontal",
+                "axisX": 0, "axisLabel": "x = 0",
+                "yMin": 0, "yMax": hi, "xMin": 0, "xMax": 2,
+                "left": {"t": "lin", "a": 1}, "right": {"t": "c", "v": 2},
+                "bottom": {"t": "c", "v": 0}, "top": {"t": "c", "v": hi},
+            }
+            compute = {
+                "expr": outer**2 - inner**2, "a": 0, "b": hi, "var": y, "label": "V", "scale": sp.pi,
+                "display_integrand": "4-y^{2}", "setup_display": setup, "keep_scale_inside": True,
+                "parts": {"R_out": "2", "R_in": "y", "var": "y", "lo": 0, "hi": hi},
+            }
+        elif case == 20:
+            # Isosceles right triangle cross sections
+            hi = 2 + tier + rep
+            s = sp.sqrt(x) + 1
+            s_tex = expr_latex(s)
+            ans = sp.Rational(1, 2) * sp.integrate(s**2, (x, 0, hi))
+            prompt = (
+                f"Cross sections perpendicular to the \\(x\\)-axis are isosceles right triangles "
+                f"with leg \\(s={s_tex}\\) on \\([0,{hi}]\\). Find the volume."
+            )
+            setup = f"\\[V=\\int_0^{{{hi}}}\\frac{{1}}{{2}}({s_tex})^2\\,dx\\]"
+            vp = {
+                "method": "cross-square", "xMin": 0, "xMax": hi,
+                "bottom": {"t": "c", "v": 0}, "top": {"t": "sqrt", "a": 1, "b": 1},
+            }
+            compute = {
+                "expr": s**2, "a": 0, "b": hi, "label": "V", "scale": sp.Rational(1, 2),
+                "display_integrand": f"({s_tex})^{{2}}", "setup_display": setup, "keep_scale_inside": True,
+                "parts": {"s": s_tex, "var": "x", "lo": 0, "hi": hi},
+            }
+        elif case == 21:
+            # Disk about y-axis: x = g(y) linear (cone)
+            m = 1 + tier + rep
+            hi = 2 + tier
+            g = y / m  # x = y/m
+            ans = sp.pi * sp.integrate(g**2, (y, 0, hi))
+            prompt = (
+                f"Use horizontal disks: rotate \\(x=\\dfrac{{y}}{{{m}}}\\) from \\(y=0\\) to "
+                f"\\(y={hi}\\) about the \\(y\\)-axis."
+            )
+            setup = f"\\[V=\\pi\\int_0^{{{hi}}}\\left(\\frac{{y}}{{{m}}}\\right)^2\\,dy\\]"
+            vp = {
+                "method": "disk-y", "orientation": "horizontal",
+                "axisX": 0, "axisLabel": "x = 0",
+                "yMin": 0, "yMax": hi, "xMin": 0, "xMax": float(hi / m),
+                "left": {"t": "c", "v": 0}, "right": {"t": "lin", "a": 1 / m},
+                "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": m},
+            }
+            compute = {
+                "expr": g**2, "a": 0, "b": hi, "var": y, "label": "V", "scale": sp.pi,
+                "display_integrand": f"(y/{m})^{{2}}", "setup_display": setup, "keep_scale_inside": True,
+                "parts": {"R": f"y/{m}", "var": "y", "lo": 0, "hi": hi},
+            }
+        elif case == 22:
+            # Shell under line about y-axis
+            m = 2 + tier
+            c = 1 + rep
+            f = m * x + c
+            hi = 1 + tier
+            ans = 2 * sp.pi * sp.integrate(x * f, (x, 0, hi))
+            prompt = f"Use shells to rotate the region under \\(y={expr_latex(f)}\\) on \\([0,{hi}]\\) about the \\(y\\)-axis."
+            setup = f"\\[V=2\\pi\\int_0^{{{hi}}}x({expr_latex(f)})\\,dx\\]"
+            vp = {
+                "method": "shell-y", "xMin": 0, "xMax": hi, "axisX": 0, "axisLabel": "x = 0",
+                "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": m, "b": c},
+            }
+            compute = {
+                "expr": x * f, "a": 0, "b": hi, "label": "V", "scale": 2 * sp.pi,
+                "display_integrand": f"x({expr_latex(f)})", "setup_display": setup, "keep_scale_inside": True,
+                "parts": {"r": "x", "h": expr_latex(f), "var": "x", "lo": 0, "hi": hi},
+            }
+        elif case == 23:
+            # Washer: outer constant, inner curve about x-axis
+            R = 3 + tier
+            f = x
+            hi = 2
+            ans = sp.pi * sp.integrate(R**2 - f**2, (x, 0, hi))
+            prompt = (
+                f"The region between \\(y={R}\\) and \\(y=x\\) on \\([0,{hi}]\\) is rotated about "
+                f"the \\(x\\)-axis. Use washers to find the volume."
+            )
+            setup = f"\\[V=\\pi\\int_0^{{{hi}}}\\big({R}^2-x^2\\big)\\,dx\\]"
+            vp = {
+                "method": "washer-x", "xMin": 0, "xMax": hi, "axisY": 0, "axisLabel": "y = 0",
+                "bottom": {"t": "lin", "a": 1}, "top": {"t": "c", "v": R},
+            }
+            compute = {
+                "expr": R**2 - f**2, "a": 0, "b": hi, "label": "V", "scale": sp.pi,
+                "display_integrand": f"{R}^{{2}}-x^{{2}}", "setup_display": setup, "keep_scale_inside": True,
+                "parts": {"R_out": str(R), "R_in": "x", "var": "x", "lo": 0, "hi": hi},
+            }
+        elif case == 24:
+            # Cross-section semicircles on diameter between y=0 and y=4-x^2
+            hi = 2
+            d = 4 - x**2
+            d_tex = "4-x^{2}"
+            ans = (sp.pi / 8) * sp.integrate(d**2, (x, 0, hi))
+            prompt = (
+                f"Cross sections perpendicular to the \\(x\\)-axis are semicircles with diameter "
+                f"from the \\(x\\)-axis up to \\(y={d_tex}\\) on \\([0,{hi}]\\). Find the volume."
+            )
+            setup = f"\\[V=\\int_0^{{{hi}}}\\frac{{\\pi}}{{8}}({d_tex})^2\\,dx\\]"
+            vp = {
+                "method": "cross-semicircle", "xMin": 0, "xMax": hi,
+                "bottom": {"t": "c", "v": 0}, "top": {"t": "poly", "k": [4, 0, -1]},
+            }
+            compute = {
+                "expr": d**2, "a": 0, "b": hi, "label": "V", "scale": sp.pi / 8,
+                "display_integrand": f"({d_tex})^{{2}}", "setup_display": setup, "keep_scale_inside": True,
+                "parts": {"d": d_tex, "var": "x", "lo": 0, "hi": hi},
+            }
+        elif case == 25:
+            # Shell under sin about y-axis
+            f = sp.sin(x)
+            hi = sp.pi
+            ans = 2 * sp.pi * sp.integrate(x * f, (x, 0, hi))
+            prompt = f"Use shells to rotate the region under \\(y=\\sin x\\) on \\([0,\\pi]\\) about the \\(y\\)-axis."
+            setup = f"\\[V=2\\pi\\int_0^{{\\pi}}x\\sin x\\,dx\\]"
+            vp = {
+                "method": "shell-y", "xMin": 0, "xMax": float(sp.pi), "axisX": 0, "axisLabel": "x = 0",
+                "bottom": {"t": "c", "v": 0}, "top": {"t": "sin", "a": 1, "b": 0},
+            }
+            compute = {
+                "expr": x * f, "a": 0, "b": hi, "label": "V", "scale": 2 * sp.pi,
+                "display_integrand": "x\\sin x", "setup_display": setup, "keep_scale_inside": True,
+                "parts": {"r": "x", "h": "\\sin x", "var": "x", "lo": 0, "hi": "\\pi"},
+            }
+        elif case == 26:
+            # Disk y=1/x about x-axis on [1,b]
+            b = 2 + tier + rep
+            f = 1 / x
+            ans = sp.pi * sp.integrate(f**2, (x, 1, b))
+            prompt = f"Rotate \\(y=\\dfrac{{1}}{{x}}\\) on \\([1,{b}]\\) about the \\(x\\)-axis."
+            setup = f"\\[V=\\pi\\int_1^{{{b}}}\\frac{{1}}{{x^2}}\\,dx\\]"
+            vp = {
+                "method": "disk-x", "xMin": 1, "xMax": b, "axisY": 0, "axisLabel": "y = 0",
+                "bottom": {"t": "c", "v": 0}, "top": {"t": "recip", "a": 1},
+            }
+            compute = {
+                "expr": f**2, "a": 1, "b": b, "label": "V", "scale": sp.pi,
+                "display_integrand": "1/x^{2}", "setup_display": setup, "keep_scale_inside": True,
+                "parts": {"R": "1/x", "var": "x", "lo": 1, "hi": b},
+            }
+        elif case == 27:
+            # Pyramid-like: square cross sections with side tapering linearly
+            hi = 3 + tier
+            s = hi - x  # side from hi down to 0
+            ans = sp.integrate(s**2, (x, 0, hi))
+            prompt = (
+                f"A solid has square cross sections perpendicular to the \\(x\\)-axis with side "
+                f"\\(s={hi}-x\\) for \\(0\\le x\\le {hi}\\). Find the volume."
+            )
+            setup = f"\\[V=\\int_0^{{{hi}}}({hi}-x)^2\\,dx\\]"
+            vp = {
+                "method": "cross-square", "xMin": 0, "xMax": hi,
+                "bottom": {"t": "c", "v": 0}, "top": {"t": "lin", "a": -1, "b": hi},
+            }
+            compute = {
+                "expr": s**2, "a": 0, "b": hi, "label": "V",
+                "display_integrand": f"({hi}-x)^{{2}}", "setup_display": setup,
+                "parts": {"s": f"{hi}-x", "var": "x", "lo": 0, "hi": hi},
+            }
+        elif case == 28:
+            # Washer about x = -1 (vertical axis) using shells is easier — use shells
+            f = x**2
+            hi = 1
+            ans = 2 * sp.pi * sp.integrate((x + 1) * f, (x, 0, hi))
+            prompt = (
+                f"Use shells to rotate the region under \\(y=x^2\\) on \\([0,{hi}]\\) "
+                f"about the line \\(x=-1\\)."
+            )
+            setup = f"\\[V=2\\pi\\int_0^{{{hi}}}(x+1)(x^2)\\,dx\\]"
+            vp = {
+                "method": "shell-y", "xMin": 0, "xMax": hi, "axisX": -1, "axisLabel": "x = -1",
+                "bottom": {"t": "c", "v": 0}, "top": {"t": "pow", "a": 1, "n": 2},
+            }
+            compute = {
+                "expr": (x + 1) * f, "a": 0, "b": hi, "label": "V", "scale": 2 * sp.pi,
+                "display_integrand": "(x+1)x^{2}", "setup_display": setup, "keep_scale_inside": True,
+                "parts": {"r": "x+1", "h": "x^{2}", "var": "x", "lo": 0, "hi": hi},
+            }
+        else:
+            # case 29: horizontal washers about x-axis — region x=√y, x=1 about x-axis? shells better
+            # Volume of solid: revolve region between y=√x and y=0 about y-axis with washers dy
+            hi = 1 + tier
+            # y from 0 to hi, x_right = hi (vertical line?), classic: y=x^2 and x=1 about y-axis
+            # x from y^{1/2} wait: region 0≤y≤1, √y ≤ x ≤ 1 about y-axis
+            hi = 1
+            ans = sp.pi * sp.integrate(1**2 - (sp.sqrt(y)) ** 2, (y, 0, hi))
+            prompt = (
+                "Use horizontal washers to rotate the region bounded by \\(y=x^2\\), \\(x=1\\), "
+                "and \\(y=0\\) about the \\(y\\)-axis."
+            )
+            setup = (
+                "For each \\(y\\), outer radius \\(x=1\\) and inner radius \\(x=\\sqrt{y}\\): "
+                f"\\[V=\\pi\\int_0^{{{hi}}}\\big(1^2-(\\sqrt{{y}})^2\\big)\\,dy\\]"
+            )
+            vp = {
+                "method": "washer-y", "orientation": "horizontal",
+                "axisX": 0, "axisLabel": "x = 0",
+                "yMin": 0, "yMax": hi, "xMin": 0, "xMax": 1,
+                "left": {"t": "sqrt", "a": 1}, "right": {"t": "c", "v": 1},
+                "bottom": {"t": "c", "v": 0}, "top": {"t": "pow", "a": 1, "n": 2},
+            }
+            compute = {
+                "expr": 1 - y, "a": 0, "b": hi, "var": y, "label": "V", "scale": sp.pi,
+                "display_integrand": "1-y", "setup_display": setup, "keep_scale_inside": True,
+                "parts": {"R_out": "1", "R_in": "\\sqrt{y}", "var": "y", "lo": 0, "hi": hi},
             }
         out.append(custom_problem(
             source, "Volume", prompt, f"V = {sp.latex(sp.simplify(ans))}", setup, "volume", diff, vp,
@@ -4472,14 +5126,14 @@ def catalog_centroids_varied():
 
 
 def catalog_arc_varied():
-    """12 arc-length concepts, including curves described as x=g(y)."""
+    """30 arc-length concepts, including curves described as x=g(y)."""
     out = []
-    N_ARC = 12
+    N_ARC = 30
     for i in range(PER_TOPIC):
         case = i % N_ARC
         diff = difficulty_for_index(i)
         tier = difficulty_tier(diff)
-        rep = (i // 10) % 2
+        rep = (i // N_ARC) % 2
         source = f"OpenStax Vol. 1 §6.4 / Briggs §6.5 arc concept {case + 1}, item {i + 1}"
         compute = None
         if case == 0:
@@ -4693,12 +5347,11 @@ def catalog_arc_varied():
                 compute=compute,
             ))
             continue
-        else:
+        elif case == 9:
             # y = √x
             n = 1 + tier + rep
             f = sp.sqrt(x)
             integrand = sp.sqrt(1 + 1 / (4 * x))
-            # avoid x=0 singularity: integrate [eps, n] or use known form from a>0
             lo = sp.Rational(1, 4) if tier == 0 else sp.Rational(1, 4 + rep)
             L = sp.simplify(sp.integrate(integrand, (x, lo, n + lo)))
             prompt = f"Find the arc length of \\(y=\\sqrt{{x}}\\) on \\([{sp.latex(lo)},{sp.latex(n + lo)}]\\)."
@@ -4706,6 +5359,285 @@ def catalog_arc_varied():
             top = {"t": "sqrt", "a": 1}
             x0, x1 = float(lo), float(n + lo)
             compute = {"f": f, "expr": integrand, "a": lo, "b": n + lo, "label": "L"}
+        elif case == 12:
+            # y = x^{3/2} scaled
+            k = 1 + tier
+            n = 1 + rep
+            f = k * x ** sp.Rational(3, 2)
+            integrand = sp.sqrt(1 + (sp.Rational(3, 2) * k * sp.sqrt(x)) ** 2)
+            L = sp.simplify(sp.integrate(integrand, (x, 0, n)))
+            prompt = f"Find the arc length of \\(y={k}x^{{3/2}}\\) on \\([0,{n}]\\)."
+            setup = f"\\[L=\\int_0^{{{n}}}\\sqrt{{1+\\left(\\frac{{3{k}}}{{2}}\\sqrt{{x}}\\right)^2}}\\,dx\\]"
+            top = {"t": "pow-shift", "a": k, "n": 1.5}
+            x0, x1 = 0, n
+            compute = {"f": f, "expr": integrand, "a": 0, "b": n, "label": "L"}
+        elif case == 13:
+            # y = cosh free — use y = (e^x + e^{-x})/2 style without naming hyperbolic: skip
+            # y = x^2/4 on [0,n]
+            n = 1 + tier + rep
+            f = x**2 / 4
+            integrand = sp.sqrt(1 + (x / 2) ** 2)
+            L = sp.simplify(sp.integrate(integrand, (x, 0, n)))
+            prompt = f"Find the arc length of \\(y=\\dfrac{{x^2}}{{4}}\\) on \\([0,{n}]\\)."
+            setup = f"\\[L=\\int_0^{{{n}}}\\sqrt{{1+\\left(\\frac{{x}}{{2}}\\right)^2}}\\,dx\\]"
+            top = {"t": "poly", "k": [0, 0, 0.25]}
+            x0, x1 = 0, n
+            compute = {"f": f, "expr": integrand, "a": 0, "b": n, "label": "L"}
+        elif case == 14:
+            # y = ln(cos x) is classic but hard; use y = ln(sec x) on small interval — may introduce issues
+            # Safer: y = e^{x/2}
+            n = 1 if tier < 2 else sp.log(2)
+            f = sp.exp(x / 2)
+            integrand = sp.sqrt(1 + sp.exp(x) / 4)
+            L = sp.simplify(sp.integrate(integrand, (x, 0, n)))
+            prompt = f"Find the arc length of \\(y=e^{{x/2}}\\) on \\([0,{sp.latex(n)}]\\)."
+            setup = f"\\[L=\\int_0^{{{sp.latex(n)}}}\\sqrt{{1+\\frac{{1}}{{4}}e^{{x}}}}\\,dx\\]"
+            top = {"t": "exp", "s": 1, "a": 0.5}
+            x0, x1 = 0.0, float(sp.N(n))
+            compute = {"f": f, "expr": integrand, "a": 0, "b": n, "label": "L"}
+        elif case == 15:
+            # Horizontal: x = (2/3)y^{3/2} already in case 10; use x = y^2/4 with simplified √(1+y²/something)
+            # Keep elementary: x = 4 - 2y
+            hi = 1 + tier + rep
+            g = 4 - 2 * y
+            integrand = sp.sqrt(1 + 4)
+            L = hi * sp.sqrt(5)
+            prompt = f"Use horizontal strips to find the arc length of \\(x=4-2y\\) on \\([0,{hi}]\\)."
+            setup = f"\\[L=\\int_0^{{{hi}}}\\sqrt{{1+4}}\\,dy\\]"
+            vp = {
+                "method": "arc", "orientation": "horizontal", "yMin": 0, "yMax": hi,
+                "left": {"t": "lin", "a": -2, "b": 4}, "right": {"t": "lin", "a": -2, "b": 4},
+            }
+            compute = {"f": g, "expr": integrand, "a": 0, "b": hi, "var": y, "label": "L", "value": L}
+            out.append(custom_problem(
+                source, "Arc length", prompt, f"L = {sp.latex(L)}", setup, "curve", diff, vp,
+                "For x=g(y), integrate \\(\\sqrt{1+(g')^2}\\,dy\\).",
+                compute=compute,
+            ))
+            continue
+        elif case == 16:
+            # Two-segment polyline different slopes
+            n = 3 + tier
+            L = sp.sqrt(1 + 1) + (n - 1) * sp.sqrt(1 + 4)  # slope 1 then slope 2
+            prompt = (
+                f"Find the length of the path \\(y=x\\) on \\([0,1]\\) followed by "
+                f"\\(y=2x-1\\) on \\([1,{n}]\\)."
+            )
+            setup = f"\\[L=\\int_0^1\\sqrt2\\,dx+\\int_1^{{{n}}}\\sqrt{{1+4}}\\,dx\\]"
+            top = {
+                "t": "piecewise",
+                "segments": [
+                    {"min": 0, "max": 1, "curve": {"t": "lin", "a": 1}},
+                    {"min": 1, "max": n, "curve": {"t": "lin", "a": 2, "b": -1}},
+                ],
+            }
+            x0, x1 = 0, n
+            L = sp.simplify(L)
+            steps = [
+                step("Split the path", "Each linear piece has constant slope."),
+                step("First segment", f"\\[L_1=\\sqrt2\\]"),
+                step("Second segment", f"\\[L_2=({n}-1)\\sqrt5\\]"),
+                step("Total", f"\\[L={sp.latex(L)}\\]"),
+            ]
+            out.append({
+                "source": source, "title": "Arc length", "prompt": prompt,
+                "choices": mc_choices(f"L = {sp.latex(L)}", f"2L", f"L/2", f"{n}"),
+                "steps": steps, "finalAnswer": f"L = {sp.latex(L)}",
+                "insight": "Polyline length is the sum of segment lengths.",
+                "visual": "curve", "difficulty": diff,
+                "visualParams": {"method": "arc", "xMin": 0, "xMax": float(n), "bottom": {"t": "c", "v": 0}, "top": top},
+                "equations": equations_kit("arc", setup),
+            })
+            continue
+        elif case == 17:
+            # y = (1/3)x^3 + 1/(4x) style classic
+            lo, hi = 1, 2 + tier
+            f = x**3 / 3 + 1 / (4 * x)
+            integrand = sp.simplify(sp.sqrt(1 + sp.diff(f, x) ** 2))
+            L = sp.simplify(sp.integrate(integrand, (x, lo, hi)))
+            prompt = f"Find the arc length of \\(y=\\dfrac{{x^3}}{{3}}+\\dfrac{{1}}{{4x}}\\) on \\([{lo},{hi}]\\)."
+            setup = f"\\[L=\\int_{{{lo}}}^{{{hi}}}\\sqrt{{1+(y')^2}}\\,dx\\]"
+            top = {"t": "poly", "k": [0, 0, 0, sp.Rational(1, 3)]}
+            x0, x1 = lo, hi
+            compute = {"f": f, "expr": integrand, "a": lo, "b": hi, "label": "L"}
+        elif case == 18:
+            # Circular arc not full quarter — central angle
+            R = 3 + tier + rep
+            # arc from x=0 to x=R/2 on upper semicircle
+            lo, hi = 0, R / 2
+            L = R * sp.asin(sp.Rational(1, 2))  # actually ∫ R/√(R²-x²) from 0 to R/2 = R arcsin(x/R)
+            L = R * sp.asin(sp.Rational(1, 2))
+            prompt = (
+                f"Find the arc length of \\(y=\\sqrt{{{R*R}-x^2}}\\) from \\(x=0\\) to \\(x={sp.latex(hi)}\\)."
+            )
+            setup = f"\\[L=\\int_0^{{{sp.latex(hi)}}}\\frac{{{R}}}{{\\sqrt{{{R*R}-x^2}}}}\\,dx\\]"
+            top = {"t": "circle-upper", "R": R, "cx": 0, "cy": 0}
+            x0, x1 = 0, float(hi)
+            compute = {"f": sp.sqrt(R**2 - x**2), "expr": R / sp.sqrt(R**2 - x**2), "a": 0, "b": hi, "label": "L", "value": L}
+        elif case == 19:
+            # y = 2√x
+            lo = sp.Rational(1, 4)
+            hi = lo + 1 + tier + rep
+            f = 2 * sp.sqrt(x)
+            integrand = sp.sqrt(1 + 1 / x)
+            L = sp.simplify(sp.integrate(integrand, (x, lo, hi)))
+            prompt = f"Find the arc length of \\(y=2\\sqrt{{x}}\\) on \\([{sp.latex(lo)},{sp.latex(hi)}]\\)."
+            setup = f"\\[L=\\int_{{{sp.latex(lo)}}}^{{{sp.latex(hi)}}}\\sqrt{{1+\\frac{{1}}{{x}}}}\\,dx\\]"
+            top = {"t": "sqrt", "a": 2}
+            x0, x1 = float(lo), float(hi)
+            compute = {"f": f, "expr": integrand, "a": lo, "b": hi, "label": "L"}
+        elif case == 20:
+            # Horizontal line segment length (geometry check)
+            n = 3 + tier + rep
+            c = 2 + tier
+            L = n
+            prompt = f"Find the arc length of the horizontal line \\(y={c}\\) from \\(x=0\\) to \\(x={n}\\)."
+            setup = f"\\[L=\\int_0^{{{n}}}\\sqrt{{1+0}}\\,dx={n}\\]"
+            top = {"t": "c", "v": c}
+            x0, x1 = 0, n
+            compute = {"f": sp.Integer(c), "expr": sp.Integer(1), "a": 0, "b": n, "label": "L"}
+        elif case == 21:
+            # y = ln(x + √(x²+1)) is asinh — avoid. Use y = x^{4/3}
+            n = 1 + tier
+            f = x ** sp.Rational(4, 3)
+            integrand = sp.sqrt(1 + (sp.Rational(4, 3) * x ** sp.Rational(1, 3)) ** 2)
+            L = sp.simplify(sp.integrate(integrand, (x, 0, n)))
+            prompt = f"Find the arc length of \\(y=x^{{4/3}}\\) on \\([0,{n}]\\)."
+            setup = f"\\[L=\\int_0^{{{n}}}\\sqrt{{1+\\left(\\frac{{4}}{{3}}x^{{1/3}}\\right)^2}}\\,dx\\]"
+            top = {"t": "pow", "a": 1, "n": sp.Rational(4, 3)}
+            x0, x1 = 0, n
+            compute = {"f": f, "expr": integrand, "a": 0, "b": n, "label": "L"}
+        elif case == 22:
+            # Horizontal x = y^2 (parabola), elementary √(1+4y²) can be slow — use x=3y
+            lo, hi = 0, 2 + tier + rep
+            g = 3 * y
+            integrand = sp.sqrt(1 + 9)
+            L = (hi - lo) * sp.sqrt(10)
+            prompt = f"Use horizontal strips to find the arc length of \\(x=3y\\) on \\([{lo},{hi}]\\)."
+            setup = f"\\[L=\\int_{{{lo}}}^{{{hi}}}\\sqrt{{1+9}}\\,dy\\]"
+            vp = {
+                "method": "arc", "orientation": "horizontal",
+                "yMin": float(lo), "yMax": float(hi),
+                "left": {"t": "lin", "a": 3}, "right": {"t": "lin", "a": 3},
+            }
+            compute = {"f": g, "expr": integrand, "a": lo, "b": hi, "var": y, "label": "L", "value": L}
+            out.append(custom_problem(
+                source, "Arc length", prompt, f"L = {sp.latex(L)}", setup, "curve", diff, vp,
+                "For x=3y, g'=3 so ds=√10 dy.",
+                compute=compute,
+            ))
+            continue
+        elif case == 23:
+            # y = (2/3)(x^2+1)^{3/2} / something — keep simple power
+            n = 1 + tier + rep
+            f = sp.Rational(1, 3) * (x**2 + 2) ** sp.Rational(3, 2)
+            # y' = x √(x²+2); 1+(y')² = 1 + x²(x²+2) = (x²+1)² ? check: 1 + x²(x²+2) = 1 + x^4 + 2x² = (x²+1)²
+            integrand = x**2 + 1
+            L = sp.simplify(sp.integrate(integrand, (x, 0, n)))
+            prompt = (
+                f"Find the arc length of \\(y=\\dfrac{{1}}{{3}}(x^2+2)^{{3/2}}\\) on \\([0,{n}]\\)."
+            )
+            setup = f"Show that \\(\\sqrt{{1+(y')^2}}=x^2+1\\), then \\[L=\\int_0^{{{n}}}(x^2+1)\\,dx\\]"
+            top = {"t": "pow-shift", "a": 1 / 3, "n": 1.5}
+            x0, x1 = 0, n
+            compute = {"f": f, "expr": integrand, "a": 0, "b": n, "label": "L"}
+        elif case == 24:
+            # Distance along y=mx+b (repeat linear with negative slope)
+            m = -(1 + tier)
+            n = 2 + rep
+            c = 3 + tier
+            f = m * x + c
+            L = n * sp.sqrt(1 + m**2)
+            prompt = f"Find the arc length of \\(y={expr_latex(f)}\\) from \\(x=0\\) to \\(x={n}\\)."
+            setup = f"\\[L=\\int_0^{{{n}}}\\sqrt{{1+({m})^2}}\\,dx\\]"
+            top = {"t": "lin", "a": m, "b": c}
+            x0, x1 = 0, n
+            compute = {"f": f, "expr": sp.sqrt(1 + m**2), "a": 0, "b": n, "label": "L"}
+        elif case == 25:
+            # y = √(x+1) - 1 style
+            lo, hi = 0, 3 + tier + rep
+            f = sp.sqrt(x + 1)
+            integrand = sp.sqrt(1 + 1 / (4 * (x + 1)))
+            L = sp.simplify(sp.integrate(integrand, (x, lo, hi)))
+            prompt = f"Find the arc length of \\(y=\\sqrt{{x+1}}\\) on \\([{lo},{hi}]\\)."
+            setup = f"\\[L=\\int_{{{lo}}}^{{{hi}}}\\sqrt{{1+\\frac{{1}}{{4(x+1)}}}}\\,dx\\]"
+            top = {"t": "sqrt", "a": 1, "b": 1}
+            x0, x1 = lo, hi
+            compute = {"f": f, "expr": integrand, "a": lo, "b": hi, "label": "L"}
+        elif case == 26:
+            # Three-point polyline
+            L = sp.sqrt(2) + sp.sqrt(5) + 2
+            prompt = (
+                "A path goes from \\((0,0)\\) to \\((1,1)\\) to \\((2,3)\\) to \\((4,3)\\) along straight segments. "
+                "Find its total length."
+            )
+            setup = "\\[L=\\sqrt{(1-0)^2+(1-0)^2}+\\sqrt{(2-1)^2+(3-1)^2}+\\sqrt{(4-2)^2+(3-3)^2}\\]"
+            steps = [
+                step("Segment lengths", f"\\[\\sqrt2+\\sqrt5+2={sp.latex(L)}\\]"),
+            ]
+            out.append({
+                "source": source, "title": "Arc length", "prompt": prompt,
+                "choices": mc_choices(f"L = {sp.latex(L)}", f"L = 5", f"L = {sp.latex(2*L)}", f"L = 3"),
+                "steps": steps, "finalAnswer": f"L = {sp.latex(L)}",
+                "insight": "Broken-line length is the sum of Euclidean segment lengths.",
+                "visual": "curve", "difficulty": diff,
+                "visualParams": {
+                    "method": "arc", "xMin": 0, "xMax": 4, "bottom": {"t": "c", "v": 0},
+                    "top": {
+                        "t": "piecewise",
+                        "segments": [
+                            {"min": 0, "max": 1, "curve": {"t": "lin", "a": 1}},
+                            {"min": 1, "max": 2, "curve": {"t": "lin", "a": 2, "b": -1}},
+                            {"min": 2, "max": 4, "curve": {"t": "c", "v": 3}},
+                        ],
+                    },
+                },
+                "equations": equations_kit("arc", setup),
+            })
+            continue
+        elif case == 27:
+            # y = x^2 on [0,1] with elementary-enough √(1+4x²) — use known form but cap work
+            # Prefer: y = (2/3)(x+1)^{3/2} already covered; use linear piecewise-free: y=x^{3/2}
+            n = 1 + tier
+            f = x ** sp.Rational(3, 2)
+            integrand = sp.sqrt(1 + (sp.Rational(3, 2) ** 2) * x)
+            L = sp.simplify(sp.integrate(integrand, (x, 0, n)))
+            prompt = f"Find the arc length of \\(y=x^{{3/2}}\\) on \\([0,{n}]\\)."
+            setup = f"\\[L=\\int_0^{{{n}}}\\sqrt{{1+\\frac{{9}}{{4}}x}}\\,dx\\]"
+            top = {"t": "pow-shift", "a": 1, "n": 1.5}
+            x0, x1 = 0, n
+            compute = {"f": f, "expr": integrand, "a": 0, "b": n, "label": "L"}
+        elif case == 28:
+            # Horizontal line x = c - y (elementary constant slant)
+            hi = 2 + tier + rep
+            m = 1
+            g = 4 - y
+            integrand = sp.sqrt(1 + m**2)
+            L = hi * sp.sqrt(2)
+            prompt = f"Use horizontal strips to find the arc length of \\(x=4-y\\) from \\(y=0\\) to \\(y={hi}\\)."
+            setup = f"\\[L=\\int_0^{{{hi}}}\\sqrt{{1+(-1)^2}}\\,dy\\]"
+            vp = {
+                "method": "arc", "orientation": "horizontal", "yMin": 0, "yMax": hi,
+                "left": {"t": "lin", "a": -1, "b": 4}, "right": {"t": "lin", "a": -1, "b": 4},
+            }
+            compute = {"f": g, "expr": integrand, "a": 0, "b": hi, "var": y, "label": "L", "value": L}
+            out.append(custom_problem(
+                source, "Arc length", prompt, f"L = {sp.latex(L)}", setup, "curve", diff, vp,
+                "Differentiate x with respect to y, then form √(1+(dx/dy)²).",
+                compute=compute,
+            ))
+            continue
+        else:
+            # case 29: y = (2/3)x^{3/2} + 1 shifted offset, elementary slant √(1+x)
+            n = 1 + tier + rep
+            f = 1 + sp.Rational(2, 3) * x ** sp.Rational(3, 2)
+            integrand = sp.sqrt(1 + x)
+            L = sp.simplify(sp.integrate(integrand, (x, 0, n)))
+            prompt = f"Find the arc length of \\(y=1+\\dfrac{{2}}{{3}}x^{{3/2}}\\) on \\([0,{n}]\\)."
+            setup = f"\\[L=\\int_0^{{{n}}}\\sqrt{{1+x}}\\,dx\\]"
+            top = {"t": "pow-shift", "a": 2 / 3, "b": 1, "n": 1.5}
+            x0, x1 = 0, n
+            compute = {"f": f, "expr": integrand, "a": 0, "b": n, "label": "L"}
         vp = {"method": "arc", "xMin": float(x0), "xMax": float(x1), "bottom": {"t": "c", "v": 0}, "top": top}
         out.append(custom_problem(
             source, "Arc length", prompt, f"L = {sp.latex(sp.simplify(L))}", setup, "curve", diff, vp,
@@ -4716,9 +5648,9 @@ def catalog_arc_varied():
 
 
 def catalog_surface_varied():
-    """12 surface-of-revolution concepts incl. about y-axis and x=g(y); 20/20/10 difficulty."""
+    """30 surface-of-revolution concepts incl. about y-axis and x=g(y); 20/20/10 difficulty."""
     out = []
-    N_SURF = 12
+    N_SURF = 30
     for i in range(PER_TOPIC):
         case = i % N_SURF
         diff = difficulty_for_index(i)
@@ -4917,18 +5849,10 @@ def catalog_surface_varied():
                 "display_integrand": f"x\\sqrt{{1+{m}^2}}",
                 "setup_display": setup,
             }
-        else:
-            # x = g(y) revolved about the x-axis (horizontal): e.g. x = √y or x = (y+c)/m
-            # S = 2π ∫ y √(1+(x')^2) dy
-            c = 1 + rep
-            m = 2 + tier  # x = (y + c)/m  ⇔  y = m x - c
-            hi = m + c if tier else (1 + c)
-            # Use x = 2√y (classic): y from 0 to n
+        elif case == 11:
+            # x = 2√y about x-axis
             n_y = 1 + tier + rep
-            g = 2 * sp.sqrt(y)  # x = 2√y
-            # x' = 1/√y; √(1+(x')^2) = √(1 + 1/y) = √((y+1)/y)
-            integrand = y * sp.sqrt(1 + (1 / sp.sqrt(y)) ** 2)
-            # domain avoid y=0 singularity: [1/4, n_y+1/4]
+            g = 2 * sp.sqrt(y)
             lo = sp.Rational(1, 4)
             hi = lo + n_y
             integrand = y * sp.sqrt(1 + 1 / y)
@@ -4943,7 +5867,7 @@ def catalog_surface_varied():
                 f"\\sqrt{{1+\\big(g'(y)\\big)^2}}\\,dy"
                 f"=2\\pi\\int_{{{sp.latex(lo)}}}^{{{sp.latex(hi)}}}y\\sqrt{{1+\\frac{{1}}{{y}}}}\\,dy\\]"
             )
-            top = {"t": "pow", "a": 1 / 4, "n": 2}  # y = x^2/4
+            top = {"t": "pow", "a": 1 / 4, "n": 2}
             method = "surface-y"
             orientation = "horizontal"
             n = float(hi)
@@ -4954,6 +5878,288 @@ def catalog_surface_varied():
                 "parts": {"radius": "y"},
                 "display_integrand": "y\\sqrt{1+1/y}",
                 "setup_display": setup,
+            }
+        elif case == 12:
+            # y = √(x) about y-axis (radius x)
+            lo = sp.Rational(1, 4)
+            hi = lo + 1 + tier + rep
+            f = sp.sqrt(x)
+            slant = sp.sqrt(1 + (1 / (2 * sp.sqrt(x))) ** 2)
+            integrand = x * slant
+            S = 2 * sp.pi * sp.integrate(integrand, (x, lo, hi))
+            prompt = (
+                f"Find the surface area when \\(y=\\sqrt{{x}}\\) on "
+                f"\\([{sp.latex(lo)},{sp.latex(hi)}]\\) is revolved about the \\(y\\)-axis."
+            )
+            setup = f"\\[S=2\\pi\\int_{{{sp.latex(lo)}}}^{{{sp.latex(hi)}}}x\\sqrt{{1+(y')^2}}\\,dx\\]"
+            top = {"t": "sqrt", "a": 1}
+            method = "surface-y"
+            axis_label = "x = 0"
+            n = float(hi)
+            x_min = float(lo)
+            compute = {
+                "f": f, "expr": integrand, "a": lo, "b": hi, "label": "S", "scale": 2 * sp.pi,
+                "parts": {"radius": "x"},
+            }
+        elif case == 13:
+            # y = e^{x/2} is hard; use y = √(x+1) about x-axis instead
+            lo, hi = 0, 3 + tier
+            f = sp.sqrt(x + 1)
+            integrand = sp.sqrt(4 * x + 5) / 2
+            S = 2 * sp.pi * sp.integrate(integrand, (x, lo, hi))
+            prompt = f"Find the surface area when \\(y=\\sqrt{{x+1}}\\) on \\([{lo},{hi}]\\) is revolved about the \\(x\\)-axis."
+            setup = f"\\[S=\\pi\\int_{{{lo}}}^{{{hi}}}\\sqrt{{4x+5}}\\,dx\\]"
+            top = {"t": "sqrt", "a": 1, "b": 1}
+            n = hi
+            compute = {"f": f, "expr": integrand, "a": lo, "b": hi, "label": "S", "scale": 2 * sp.pi}
+        elif case == 14:
+            # y = x^{3/2} about x-axis
+            k = 1 + tier
+            f = k * x ** sp.Rational(3, 2)
+            integrand = f * sp.sqrt(1 + (sp.Rational(3, 2) * k * sp.sqrt(x)) ** 2)
+            S = 2 * sp.pi * sp.integrate(integrand, (x, 0, n))
+            prompt = f"Find the surface area when \\(y={k}x^{{3/2}}\\) on \\([0,{n}]\\) is revolved about the \\(x\\)-axis."
+            setup = f"\\[S=2\\pi\\int_0^{{{n}}}{k}x^{{3/2}}\\sqrt{{1+\\left(\\frac{{3{k}}}{{2}}\\sqrt{{x}}\\right)^2}}\\,dx\\]"
+            top = {"t": "pow-shift", "a": k, "n": 1.5}
+            compute = {"f": f, "expr": integrand, "a": 0, "b": n, "label": "S", "scale": 2 * sp.pi}
+        elif case == 15:
+            # About y = -1
+            m = 1 + tier
+            f = m * x + 2
+            axis = -1
+            n = 1
+            radius = f - axis
+            S = 2 * sp.pi * sp.sqrt(1 + m**2) * sp.integrate(radius, (x, 0, n))
+            prompt = f"Find the surface area when \\(y={expr_latex(f)}\\) on \\([0,{n}]\\) is revolved about \\(y={axis}\\)."
+            setup = f"\\[S=2\\pi\\int_0^{{{n}}}({expr_latex(radius)})\\sqrt{{1+{m}^2}}\\,dx\\]"
+            top = {"t": "lin", "a": m, "b": 2}
+            axis_y = axis
+            axis_label = f"y = {axis}"
+            compute = {
+                "f": f, "expr": radius * sp.sqrt(1 + m**2), "a": 0, "b": n, "label": "S", "scale": 2 * sp.pi,
+                "parts": {"radius": expr_latex(radius)},
+            }
+        elif case == 16:
+            # y = √(4x) about x-axis — elementary slant after simplify
+            lo = sp.Rational(1, 4)
+            hi = lo + 1 + tier + rep
+            f = 2 * sp.sqrt(x)
+            # y' = 1/√x; y√(1+(y')²) = 2√x * √(1+1/x) = 2√(x+1)
+            integrand = 2 * sp.sqrt(x + 1)
+            S = 2 * sp.pi * sp.integrate(integrand, (x, lo, hi))
+            prompt = f"Find the surface area when \\(y=2\\sqrt{{x}}\\) on \\([{sp.latex(lo)},{sp.latex(hi)}]\\) is revolved about the \\(x\\)-axis."
+            setup = f"Simplify first: \\[S=2\\pi\\int_{{{sp.latex(lo)}}}^{{{sp.latex(hi)}}}2\\sqrt{{x+1}}\\,dx\\]"
+            top = {"t": "sqrt", "a": 2}
+            n = float(hi)
+            x_min = float(lo)
+            compute = {"f": f, "expr": integrand, "a": lo, "b": hi, "label": "S", "scale": 2 * sp.pi}
+        elif case == 17:
+            # Cone: y = mx about x-axis (from c)
+            m = 1 + tier + rep
+            f = m * x
+            S = 2 * sp.pi * sp.sqrt(1 + m**2) * sp.integrate(f, (x, 0, n))
+            prompt = f"Find the surface area when \\(y={m}x\\) on \\([0,{n}]\\) is revolved about the \\(x\\)-axis."
+            setup = f"\\[S=2\\pi\\int_0^{{{n}}}({m}x)\\sqrt{{1+{m}^2}}\\,dx\\]"
+            top = {"t": "lin", "a": m}
+            compute = {
+                "f": f, "expr": f * sp.sqrt(1 + m**2), "a": 0, "b": n, "label": "S", "scale": 2 * sp.pi,
+            }
+        elif case == 18:
+            # y = √(4-x) about x-axis
+            c = 4 + tier
+            hi = 1 + rep
+            f = sp.sqrt(c - x)
+            integrand = sp.sqrt(4 * (c - x) + 1) / 2
+            S = 2 * sp.pi * sp.integrate(integrand, (x, 0, hi))
+            prompt = f"Find the surface area when \\(y=\\sqrt{{{c}-x}}\\) on \\([0,{hi}]\\) is revolved about the \\(x\\)-axis."
+            setup = f"\\[S=\\pi\\int_0^{{{hi}}}\\sqrt{{{4 * c + 1}-4x}}\\,dx\\]"
+            top = {"t": "sqrt", "a": 1}
+            n = hi
+            compute = {"f": f, "expr": integrand, "a": 0, "b": hi, "label": "S", "scale": 2 * sp.pi}
+        elif case == 19:
+            # x = y^2 about y-axis? about x-axis with dy: radius y
+            hi = 1 + tier
+            g = y**2
+            integrand = y * sp.sqrt(1 + (2 * y) ** 2)
+            S = 2 * sp.pi * sp.integrate(integrand, (y, 0, hi))
+            prompt = f"Find the surface area when \\(x=y^2\\) on \\([0,{hi}]\\) is revolved about the \\(x\\)-axis."
+            setup = f"\\[S=2\\pi\\int_0^{{{hi}}}y\\sqrt{{1+4y^2}}\\,dy\\]"
+            top = {"t": "sqrt", "a": 1}
+            method = "surface-y"
+            orientation = "horizontal"
+            n = float(hi)
+            axis_label = "y = 0"
+            compute = {
+                "f": g, "expr": integrand, "a": 0, "b": hi, "var": y, "label": "S", "scale": 2 * sp.pi,
+                "parts": {"radius": "y"},
+            }
+        elif case == 20:
+            # y = √(1+x) about x-axis — elementary
+            lo, hi = 0, 3 + tier + rep
+            f = sp.sqrt(1 + x)
+            # y' = 1/(2√(1+x)); y√(1+(y')²) = √(1+x) * √(1+1/(4(1+x))) = √(4(1+x)+1)/2
+            integrand = sp.sqrt(4 * x + 5) / 2
+            S = 2 * sp.pi * sp.integrate(integrand, (x, lo, hi))
+            prompt = f"Find the surface area when \\(y=\\sqrt{{1+x}}\\) on \\([{lo},{hi}]\\) is revolved about the \\(x\\)-axis."
+            setup = f"\\[S=\\pi\\int_{{{lo}}}^{{{hi}}}\\sqrt{{4x+5}}\\,dx\\]"
+            top = {"t": "sqrt", "a": 1, "b": 1}
+            n = hi
+            compute = {"f": f, "expr": integrand, "a": lo, "b": hi, "label": "S", "scale": 2 * sp.pi}
+        elif case == 21:
+            # Frustum: y from c1 to c2 linear
+            c1, c2 = 1 + rep, 3 + tier
+            n = 2
+            m = (c2 - c1) / n
+            f = c1 + m * x
+            S = 2 * sp.pi * sp.sqrt(1 + m**2) * sp.integrate(f, (x, 0, n))
+            prompt = (
+                f"A frustum is generated by rotating the line from \\((0,{c1})\\) to \\(({n},{c2})\\) "
+                f"about the \\(x\\)-axis. Find the lateral surface area."
+            )
+            setup = f"\\[S=2\\pi\\int_0^{{{n}}}({expr_latex(f)})\\sqrt{{1+({m})^2}}\\,dx\\]"
+            top = {"t": "lin", "a": float(m), "b": c1}
+            compute = {
+                "f": f, "expr": f * sp.sqrt(1 + m**2), "a": 0, "b": n, "label": "S", "scale": 2 * sp.pi,
+            }
+        elif case == 22:
+            # y = x^2 about y-axis (radius x)
+            hi = 1 if tier < 2 else sp.Rational(3, 2)
+            f = x**2
+            integrand = x * sp.sqrt(1 + (2 * x) ** 2)
+            S = 2 * sp.pi * sp.integrate(integrand, (x, 0, hi))
+            prompt = f"Find the surface area when \\(y=x^2\\) on \\([0,{sp.latex(hi)}]\\) is revolved about the \\(y\\)-axis."
+            setup = f"\\[S=2\\pi\\int_0^{{{sp.latex(hi)}}}x\\sqrt{{1+4x^2}}\\,dx\\]"
+            top = {"t": "pow", "a": 1, "n": 2}
+            method = "surface-y"
+            axis_label = "x = 0"
+            n = float(hi)
+            compute = {
+                "f": f, "expr": integrand, "a": 0, "b": hi, "label": "S", "scale": 2 * sp.pi,
+                "parts": {"radius": "x"},
+            }
+        elif case == 23:
+            # Sphere full: y=√(R²-x²) full diameter
+            R = 2 + tier + rep
+            S = 4 * sp.pi * R**2  # known full sphere
+            # Actually revolving upper semicircle about x-axis gives full sphere
+            lo, hi = -R, R
+            prompt = (
+                f"Find the surface area of the sphere obtained by revolving "
+                f"\\(y=\\sqrt{{{R*R}-x^2}}\\) on \\([{-R},{R}]\\) about the \\(x\\)-axis."
+            )
+            setup = f"\\[S=2\\pi\\int_{{-{R}}}^{{{R}}}R\\,dx=4\\pi R^2\\]"
+            top = {"t": "circle-upper", "R": R, "cx": 0, "cy": 0}
+            steps = [
+                step("Strategy: spherical surface", "For a semicircle of radius R, y√(1+(y')²)=R."),
+                step("Integrate", f"\\[S=2\\pi R\\int_{{-{R}}}^{{{R}}}1\\,dx=4\\pi R^2={sp.latex(S)}\\]"),
+            ]
+            out.append({
+                "source": source, "title": "Surface area", "prompt": prompt,
+                "choices": mc_choices(f"S = {sp.latex(S)}", f"2S", f"S/2", f"{R**2}"),
+                "steps": steps, "finalAnswer": f"S = {sp.latex(S)}",
+                "insight": "Revolving a semicircle about its diameter yields a full sphere of area 4πR².",
+                "visual": "surface", "difficulty": diff,
+                "visualParams": {
+                    "method": "surface-x", "xMin": float(lo), "xMax": float(hi),
+                    "axisY": 0, "axisLabel": "y = 0", "bottom": {"t": "c", "v": 0}, "top": top,
+                },
+                "equations": equations_kit("surface", setup),
+            })
+            continue
+        elif case == 24:
+            # y = x + c about x-axis (linear, elementary)
+            m, c = 1, 2 + tier
+            f = m * x + c
+            hi = 1 + rep
+            S = 2 * sp.pi * sp.sqrt(1 + m**2) * sp.integrate(f, (x, 0, hi))
+            prompt = f"Find the surface area when \\(y={expr_latex(f)}\\) on \\([0,{hi}]\\) is revolved about the \\(x\\)-axis."
+            setup = f"\\[S=2\\pi\\int_0^{{{hi}}}({expr_latex(f)})\\sqrt{{2}}\\,dx\\]"
+            top = {"t": "lin", "a": m, "b": c}
+            n = hi
+            compute = {
+                "f": f, "expr": f * sp.sqrt(2), "a": 0, "b": hi, "label": "S", "scale": 2 * sp.pi,
+            }
+        elif case == 25:
+            # Horizontal: x = 2y about x-axis (cone)
+            hi = 1 + tier + rep
+            g = 2 * y
+            integrand = y * sp.sqrt(5)
+            S = 2 * sp.pi * sp.integrate(integrand, (y, 0, hi))
+            prompt = f"Find the surface area when \\(x=2y\\) on \\(y\\in[0,{hi}]\\) is revolved about the \\(x\\)-axis."
+            setup = f"\\[S=2\\pi\\int_0^{{{hi}}}y\\sqrt{{5}}\\,dy\\]"
+            top = {"t": "lin", "a": sp.Rational(1, 2)}
+            method = "surface-y"
+            orientation = "horizontal"
+            n = float(hi)
+            axis_label = "y = 0"
+            compute = {
+                "f": g, "expr": integrand, "a": 0, "b": hi, "var": y, "label": "S", "scale": 2 * sp.pi,
+                "parts": {"radius": "y"},
+            }
+        elif case == 26:
+            # y = c + (2/3)x^{3/2} about x-axis
+            c = 1 + tier + rep
+            f = c + sp.Rational(2, 3) * x ** sp.Rational(3, 2)
+            integrand = f * sp.sqrt(1 + x)
+            hi = 1 + tier
+            S = 2 * sp.pi * sp.integrate(integrand, (x, 0, hi))
+            prompt = f"Find the surface area when \\(y={c}+\\frac{{2}}{{3}}x^{{3/2}}\\) on \\([0,{hi}]\\) is revolved about the \\(x\\)-axis."
+            setup = f"\\[S=2\\pi\\int_0^{{{hi}}}\\left({c}+\\frac{{2}}{{3}}x^{{3/2}}\\right)\\sqrt{{1+x}}\\,dx\\]"
+            top = {"t": "pow-shift", "a": 2 / 3, "b": c, "n": 1.5}
+            n = hi
+            compute = {"f": f, "expr": integrand, "a": 0, "b": hi, "label": "S", "scale": 2 * sp.pi}
+        elif case == 27:
+            # Constant radius cylinder about y-axis: x=c rotated? that's vertical cylinder
+            c = 2 + tier + rep
+            n = 3 + tier
+            # revolving x=c (vertical line) about y-axis from y=0 to n: area 2π c n
+            S = 2 * sp.pi * c * n
+            prompt = (
+                f"A vertical line \\(x={c}\\) from \\(y=0\\) to \\(y={n}\\) is revolved about the "
+                f"\\(y\\)-axis. Find the lateral surface area."
+            )
+            setup = f"\\[S=2\\pi\\cdot {c}\\cdot {n}\\]"
+            steps = [
+                step("Cylinder side", f"Radius \\({c}\\), height \\({n}\\)."),
+                step("Area", f"\\[S=2\\pi r h={sp.latex(S)}\\]"),
+            ]
+            out.append({
+                "source": source, "title": "Surface area", "prompt": prompt,
+                "choices": mc_choices(f"S = {sp.latex(S)}", f"2S", f"S/2", f"{c * n}"),
+                "steps": steps, "finalAnswer": f"S = {sp.latex(S)}",
+                "insight": "A vertical segment revolved about the y-axis is a right circular cylinder.",
+                "visual": "surface", "difficulty": diff,
+                "visualParams": {
+                    "method": "surface-y", "xMin": 0, "xMax": float(c), "axisX": 0, "axisLabel": "x = 0",
+                    "bottom": {"t": "c", "v": 0}, "top": {"t": "c", "v": n},
+                },
+                "equations": equations_kit("surface", setup),
+            })
+            continue
+        elif case == 28:
+            # y = √(4x) about x-axis on a safe interval
+            lo = 1
+            hi = 2 + tier + rep
+            f = 2 * sp.sqrt(x)
+            integrand = 2 * sp.sqrt(x + 1)  # simplified band factor
+            S = 2 * sp.pi * sp.integrate(integrand, (x, lo, hi))
+            prompt = f"Find the surface area when \\(y=2\\sqrt{{x}}\\) on \\([{lo},{hi}]\\) is revolved about the \\(x\\)-axis."
+            setup = f"\\[S=4\\pi\\int_{{{lo}}}^{{{hi}}}\\sqrt{{x+1}}\\,dx\\]"
+            top = {"t": "sqrt", "a": 2}
+            n = hi
+            x_min = float(lo)
+            compute = {"f": f, "expr": integrand, "a": lo, "b": hi, "label": "S", "scale": 2 * sp.pi}
+        else:
+            # case 29: y = 4 - x (falling line) about x-axis
+            f = 4 - x
+            hi = 2 + tier
+            S = 2 * sp.pi * sp.sqrt(2) * sp.integrate(f, (x, 0, hi))
+            prompt = f"Find the surface area when \\(y=4-x\\) on \\([0,{hi}]\\) is revolved about the \\(x\\)-axis."
+            setup = f"\\[S=2\\pi\\int_0^{{{hi}}}(4-x)\\sqrt{{2}}\\,dx\\]"
+            top = {"t": "lin", "a": -1, "b": 4}
+            n = hi
+            compute = {
+                "f": f, "expr": f * sp.sqrt(2), "a": 0, "b": hi, "label": "S", "scale": 2 * sp.pi,
             }
         vp = {
             "method": method,
@@ -5035,17 +6241,16 @@ def catalog_inertia_varied():
 
 
 def catalog_fundamentals_conceptual():
-    """10 distinct antiderivative concepts × 5 items = 50; difficulty by index (20/20/10)."""
+    """30 distinct antiderivative / FTC concepts; difficulty by index (20/20/10)."""
     out = []
+    N_FUND = 30
     for i in range(PER_TOPIC):
-        case = i % 10
+        case = i % N_FUND
         diff = difficulty_for_index(i)
         tier = difficulty_tier(diff)
-        # Secondary variation within the same difficulty band
-        rep = (i // 10) % 2
+        rep = (i // N_FUND) % 2
         source = f"OpenStax Vol. 1 §4.10 / Briggs §4.9 antiderivative concept {case + 1}, item {i + 1}"
         if case == 0:
-            # Power rule — hard uses fractional / negative powers
             if tier == 0:
                 expr = (2 + rep) * x ** (1 + rep)
             elif tier == 1:
@@ -5059,7 +6264,7 @@ def catalog_fundamentals_conceptual():
             elif tier == 1:
                 expr = (2 + rep) * x**4 - 3 * x**2 + (5 + rep) * x - 1
             else:
-                expr = (x**2 + 1) * (x - 2 - rep)  # expand first
+                expr = (x**2 + 1) * (x - 2 - rep)
             out.append(make_indefinite(expr, source, "Term-by-term antiderivative", diff, "fundamentals", x))
         elif case == 2:
             if tier == 0:
@@ -5075,7 +6280,7 @@ def catalog_fundamentals_conceptual():
             elif tier == 1:
                 expr = (2 + rep) * sp.exp(x) - (3 + rep) / x + x
             else:
-                expr = sp.exp(2 * x) / sp.exp(x) + (4 + rep) / x  # simplify e^x
+                expr = sp.exp(2 * x) / sp.exp(x) + (4 + rep) / x
             out.append(make_indefinite(expr, source, "Exponential and logarithmic antiderivative", diff, "fundamentals", x))
         elif case == 4:
             k = 1 + tier + rep
@@ -5092,7 +6297,6 @@ def catalog_fundamentals_conceptual():
             elif tier == 1:
                 expr = (3 + rep) / sp.sqrt(4 - x**2)
             else:
-                # arcsin of linear argument / scaled circle
                 expr = (4 + rep) / sp.sqrt(9 - (x + 1) ** 2)
             out.append(make_indefinite(expr, source, "Inverse-trig pattern", diff, "fundamentals", x))
         elif case == 6:
@@ -5112,15 +6316,14 @@ def catalog_fundamentals_conceptual():
             else:
                 expr = sp.exp(t) - (2 + rep) * t
                 C0 = 1
-            F = sp.integrate(expr, t) + (C0 - sp.integrate(expr, t).subs(t, 0))
-            F = sp.simplify(F)
+            F = sp.simplify(sp.integrate(expr, t) + (C0 - sp.integrate(expr, t).subs(t, 0)))
             prompt = f"Given \\(F'(t)={expr_latex(expr, t)}\\) and \\(F(0)={C0}\\), find \\(F(t)\\)."
             ans = f"F(t) = {expr_latex(F, t)}"
             setup = f"\\[F(t)=\\int ({expr_latex(expr, t)})\\,dt+C,\\quad F(0)={C0}\\]"
             vp = infer_visual_params(expr, "fundamentals", 0, 2, t)
             out.append(custom_problem(
                 source, "Initial value antiderivative", prompt, ans, setup, "area", diff, vp,
-                f"{source} — antiderivative plus an initial condition fixes \\(C\\).",
+                "An antiderivative plus an initial condition fixes the constant \\(C\\).",
             ))
         elif case == 8:
             if tier == 0:
@@ -5139,9 +6342,9 @@ def catalog_fundamentals_conceptual():
             vp = infer_visual_params(acc, "fundamentals", 0, 2, t)
             out.append(custom_problem(
                 source, "Motion from acceleration", prompt, ans, setup, "area", diff, vp,
-                f"{source} — integrate acceleration to velocity.",
+                "Integrate acceleration to recover velocity; use the initial velocity to fix \\(C\\).",
             ))
-        else:
+        elif case == 9:
             if tier == 0:
                 expr, a0, b0 = (1 + rep) * x**2 + 1, 0, 2 + rep
             elif tier == 1:
@@ -5149,12 +6352,257 @@ def catalog_fundamentals_conceptual():
             else:
                 expr, a0, b0 = 1 / (1 + x**2) + x, 0, 1 + rep
             out.append(make_definite(expr, a0, b0, source, "Fundamental Theorem evaluation", diff, "area", x))
+        elif case == 10:
+            # Expand product before integrating
+            if tier == 0:
+                expr = x * (x + 2 + rep)
+            elif tier == 1:
+                expr = (x + 1) * (x**2 - (1 + rep))
+            else:
+                expr = (2 * x - 1) * (x**2 + x + 1 + rep)
+            out.append(make_indefinite(sp.expand(expr), source, "Expand then integrate", diff, "fundamentals", x))
+        elif case == 11:
+            # Constant-multiple rule focus
+            c = 5 + 2 * tier + rep
+            expr = c * (x**3 - (1 + rep) * x)
+            out.append(make_indefinite(expr, source, "Constant-multiple rule", diff, "fundamentals", x))
+        elif case == 12:
+            # Negative / reciprocal powers (1/x^n)
+            if tier == 0:
+                expr = (3 + rep) / x**2
+            elif tier == 1:
+                expr = (4 + rep) / x**3 + (1 + rep) / x
+            else:
+                expr = (2 + rep) * x ** sp.Rational(-5, 2) + 1 / x**2
+            out.append(make_indefinite(expr, source, "Negative-power antiderivative", diff, "fundamentals", x))
+        elif case == 13:
+            # Root powers as fractional exponents
+            if tier == 0:
+                expr = (2 + rep) * sp.sqrt(x)
+            elif tier == 1:
+                expr = (3 + rep) * x ** sp.Rational(1, 3) + sp.sqrt(x)
+            else:
+                expr = (4 + rep) / sp.sqrt(x) + x ** sp.Rational(3, 2)
+            out.append(make_indefinite(expr, source, "Root / fractional powers", diff, "fundamentals", x))
+        elif case == 14:
+            # Linear composition u-sub: ∫ f(ax+b)
+            a = 2 + tier
+            b = 1 + rep
+            if tier == 0:
+                expr = sp.cos(a * x + b)
+            elif tier == 1:
+                expr = sp.exp(a * x + b)
+            else:
+                expr = (a * x + b) ** 3
+            out.append(make_indefinite(expr, source, "Linear composition substitution", diff, "fundamentals", x))
+        elif case == 15:
+            # sec/tan elementary pair
+            if tier == 0:
+                expr = (2 + rep) * sp.sec(x) ** 2
+            elif tier == 1:
+                expr = (1 + rep) * sp.sec(x) * sp.tan(x)
+            else:
+                expr = (2 + rep) * sp.sec(x) ** 2 + (1 + rep) * sp.sec(x) * sp.tan(x)
+            out.append(make_indefinite(expr, source, "Secant–tangent forms", diff, "fundamentals", x))
+        elif case == 16:
+            # Average value of a function
+            if tier == 0:
+                expr, a0, b0 = (1 + rep) * x + 2, 0, 4
+            elif tier == 1:
+                expr, a0, b0 = x**2 + (1 + rep), 0, 3
+            else:
+                expr, a0, b0 = sp.sin(x) + (1 + rep), 0, sp.pi
+            avg = sp.simplify(sp.integrate(expr, (x, a0, b0)) / (b0 - a0))
+            prompt = (
+                f"Find the average value of \\(f(x)={expr_latex(expr)}\\) on "
+                f"\\([{sp.latex(a0)},{sp.latex(b0)}]\\)."
+            )
+            setup = (
+                f"\\[f_{{\\mathrm{{avg}}}}=\\frac{{1}}{{{sp.latex(b0 - a0)}}}"
+                f"\\int_{{{sp.latex(a0)}}}^{{{sp.latex(b0)}}}({expr_latex(expr)})\\,dx\\]"
+            )
+            ans = f"f_{{\\mathrm{{avg}}}} = {nice_latex(avg)}"
+            vp = infer_visual_params(expr, "fundamentals", float(a0), float(sp.N(b0)), x)
+            out.append(custom_problem(
+                source, "Average value of a function", prompt, ans, setup, "area", diff, vp,
+                "Average value is the definite integral divided by interval length.",
+                compute={"expr": expr, "a": a0, "b": b0, "label": "f_{avg}", "scale": 1 / (b0 - a0)},
+            ))
+        elif case == 17:
+            # Velocity → position IVP
+            if tier == 0:
+                vel = (3 + rep) * t + 1
+                s0 = 2
+            elif tier == 1:
+                vel = t**2 - (1 + rep) * t
+                s0 = 0
+            else:
+                vel = sp.cos(t) + (1 + rep)
+                s0 = 4
+            pos = sp.simplify(sp.integrate(vel, t) + (s0 - sp.integrate(vel, t).subs(t, 0)))
+            prompt = f"If \\(v(t)={expr_latex(vel, t)}\\) and \\(s(0)={s0}\\), find the position \\(s(t)\\)."
+            ans = f"s(t) = {expr_latex(pos, t)}"
+            setup = f"\\[s(t)=\\int({expr_latex(vel, t)})dt+C,\\quad s(0)={s0}\\]"
+            vp = infer_visual_params(vel, "fundamentals", 0, 2, t)
+            out.append(custom_problem(
+                source, "Position from velocity", prompt, ans, setup, "area", diff, vp,
+                "Position is the antiderivative of velocity fixed by an initial position.",
+            ))
+        elif case == 18:
+            # Net change of a rate
+            if tier == 0:
+                rate = 4 + (1 + rep) * t
+                T = 5
+            elif tier == 1:
+                rate = 10 - (2 + rep) * t
+                T = 3
+            else:
+                rate = (2 + rep) * t**2 + 1
+                T = 2
+            delta = sp.simplify(sp.integrate(rate, (t, 0, T)))
+            prompt = (
+                f"A quantity changes at rate \\(r(t)={expr_latex(rate, t)}\\). "
+                f"Find the net change from \\(t=0\\) to \\(t={T}\\)."
+            )
+            setup = f"\\[\\Delta Q=\\int_0^{{{T}}}({expr_latex(rate, t)})\\,dt\\]"
+            ans = f"\\Delta Q = {nice_latex(delta)}"
+            vp = infer_visual_params(rate, "fundamentals", 0, T, t)
+            out.append(custom_problem(
+                source, "Net change theorem", prompt, ans, setup, "area", diff, vp,
+                "Net change equals the definite integral of the rate of change.",
+                compute={"expr": rate, "a": 0, "b": T, "var": t, "label": "\\Delta Q"},
+            ))
+        elif case == 19:
+            # Even integrand shortcut on symmetric interval
+            if tier == 0:
+                expr = x**2 + (1 + rep)
+                a0 = 2
+            elif tier == 1:
+                expr = x**4 + (2 + rep) * x**2
+                a0 = 1
+            else:
+                expr = sp.cos(x) + (1 + rep)  # even-ish after cos
+                a0 = sp.pi / 2
+            val = sp.simplify(sp.integrate(expr, (x, -a0, a0)))
+            prompt = (
+                f"Evaluate \\(\\displaystyle\\int_{{-{sp.latex(a0)}}}^{{{sp.latex(a0)}}}({expr_latex(expr)})\\,dx\\). "
+                f"Use even/odd properties if helpful."
+            )
+            setup = (
+                f"The integrand is even: "
+                f"\\[\\int_{{-a}}^{{a}}f=2\\int_0^{{a}}f\\]"
+            )
+            ans = nice_latex(val)
+            out.append(make_definite(expr, -a0, a0, source, "Even/odd definite integral", diff, "area", x))
+            out[-1]["prompt"] = prompt
+            out[-1]["title"] = "Even/odd definite integral"
+        elif case == 20:
+            # Chain-rule reverse: derivative of composition recognizable
+            k = 2 + tier + rep
+            if tier == 0:
+                expr = k * sp.cos(k * x)
+            elif tier == 1:
+                expr = (2 * x) / (x**2 + k)
+            else:
+                expr = (3 * x**2) * sp.exp(x**3 + k)
+            out.append(make_indefinite(expr, source, "Recognize chain-rule reverse", diff, "fundamentals", x))
+        elif case == 21:
+            # Mixed elementary sum
+            if tier == 0:
+                expr = x**2 + sp.sin(x) + (1 + rep)
+            elif tier == 1:
+                expr = sp.exp(x) + (2 + rep) * sp.cos(x) + x
+            else:
+                expr = 1 / x + sp.sec(x) ** 2 + (1 + rep) * x**3
+            out.append(make_indefinite(expr, source, "Mixed elementary sum", diff, "fundamentals", x))
+        elif case == 22:
+            # Definite of exponential
+            a_exp = 1 + tier
+            lo, hi = 0, 1 + rep if tier < 2 else sp.log(2)
+            expr = sp.exp(a_exp * x)
+            out.append(make_definite(expr, lo, hi, source, "Definite exponential integral", diff, "area", x))
+        elif case == 23:
+            # Arcsec-style: 1/(|x|√(x²−a²)) — use simpler 1/(x√(x²−a²)) on x>a
+            a = 2 + tier
+            lo, hi = a + 1, a + 2 + rep
+            expr = 1 / (x * sp.sqrt(x**2 - a**2))
+            out.append(make_definite(expr, lo, hi, source, "Arcsecant-type integrand", diff, "area", x))
+        elif case == 24:
+            # Rewrite rational as polynomial + remainder
+            if tier == 0:
+                expr = (x**2 + (1 + rep)) / x  # x + (1+rep)/x
+            elif tier == 1:
+                expr = (x**3 - 1) / x  # x^2 - 1/x? wait (x^3-1)/x = x^2 - x^{-1}
+            else:
+                expr = (x**2 + 3 * x + 2) / (x + 1)  # after division
+            expr = sp.simplify(expr)
+            out.append(make_indefinite(expr, source, "Rewrite rational before integrating", diff, "fundamentals", x))
+        elif case == 25:
+            # Accumulation function F(b) − F(a) with given F'
+            if tier == 0:
+                expr, a0, b0 = 3 * x**2 + (1 + rep), 1, 3
+            elif tier == 1:
+                expr, a0, b0 = sp.cos(x), 0, sp.pi / 3
+            else:
+                expr, a0, b0 = 1 / (1 + x**2), 0, 1
+            out.append(make_definite(expr, a0, b0, source, "Accumulation / FTC net change", diff, "area", x))
+        elif case == 26:
+            # cos on a half-period / full period
+            if tier == 0:
+                expr, a0, b0 = (2 + rep) * sp.cos(x), 0, sp.pi / 2
+            elif tier == 1:
+                expr, a0, b0 = sp.cos(2 * x), 0, sp.pi / 4
+            else:
+                expr, a0, b0 = (1 + rep) + sp.cos(x), 0, sp.pi
+            out.append(make_definite(expr, a0, b0, source, "Definite trigonometric integral", diff, "area", x))
+        elif case == 27:
+            # Simple u-sub with sqrt(linear)
+            k = 1 + tier + rep
+            if tier < 2:
+                expr = (2 + rep) / sp.sqrt(k * x + 1)
+            else:
+                expr = x / sp.sqrt(x**2 + k)
+            out.append(make_indefinite(expr, source, "Substitution under a square root", diff, "fundamentals", x))
+        elif case == 28:
+            # Power + trig term-by-term
+            if tier == 0:
+                expr = x**3 + (2 + rep) * sp.sin(x)
+            elif tier == 1:
+                expr = (1 + rep) * x**2 - 4 * sp.cos(x)
+            else:
+                expr = x**4 + sp.sec(x) ** 2 - (1 + rep)
+            out.append(make_indefinite(expr, source, "Power-plus-trig mix", diff, "fundamentals", x))
+        else:
+            # Motion: find displacement from velocity over an interval
+            if tier == 0:
+                vel = (2 + rep) * t + 1
+                T = 4
+            elif tier == 1:
+                vel = 3 * t**2 - (1 + rep)
+                T = 2
+            else:
+                vel = sp.sin(t) + (1 + rep) * t
+                T = sp.pi / 2
+            disp = sp.simplify(sp.integrate(vel, (t, 0, T)))
+            prompt = (
+                f"A particle has velocity \\(v(t)={expr_latex(vel, t)}\\). "
+                f"Find its displacement from \\(t=0\\) to \\(t={sp.latex(T)}\\)."
+            )
+            setup = f"\\[s({sp.latex(T)})-s(0)=\\int_0^{{{sp.latex(T)}}}({expr_latex(vel, t)})\\,dt\\]"
+            ans = f"\\Delta s = {nice_latex(disp)}"
+            vp = infer_visual_params(vel, "fundamentals", 0, float(sp.N(T)), t)
+            out.append(custom_problem(
+                source, "Displacement from velocity", prompt, ans, setup, "area", diff, vp,
+                "Displacement is the definite integral of velocity over the time interval.",
+                compute={"expr": vel, "a": 0, "b": T, "var": t, "label": "\\Delta s"},
+            ))
     return out[:PER_TOPIC]
 
 
 def catalog_centroids_conceptual():
+    """30 distinct centroid concepts; difficulty by index (20/20/10)."""
     out = []
-    N_CENT = 14
+    N_CENT = 30
     for i in range(PER_TOPIC):
         case = i % N_CENT
         diff = difficulty_for_index(i)
@@ -5164,6 +6612,7 @@ def catalog_centroids_conceptual():
         b, h = 3 + j, 2 + j
         cutout = None
         parts = None
+        x_min = 0
         source = f"OpenStax Vol. 1 §6.3 / Briggs §6.7 centroid concept {case + 1}, item {i + 1}"
         if case == 0:
             ans = f"\\left({frac_latex(sp.Rational(b, 2))},{frac_latex(sp.Rational(h, 2))}\\right)"
@@ -5305,13 +6754,12 @@ def catalog_centroids_conceptual():
             top = {"t": "lin", "a": (base2 - base1) / height, "b": base1}
             b = height
             x_min = 0
-        else:
+        elif case == 13:
             # Horizontal strips: region between x = y^2 and x = c
             hi = 2 + j
             c = hi * hi
             width = c - y**2
             A = sp.integrate(width, (y, 0, hi))
-            # M_x = ∫ y * width dy; M_y = ∫ (1/2)(right^2 - left^2) dy
             Mx = sp.integrate(y * width, (y, 0, hi))
             My = sp.integrate((c**2 - (y**2) ** 2) / 2, (y, 0, hi))
             xb = sp.simplify(My / A)
@@ -5330,30 +6778,222 @@ def catalog_centroids_conceptual():
             top = {"t": "sqrt", "a": 1}
             b = c
             x_min = 0
-            f = None  # handled with special compute below
-            compute_h = {
-                "expr": width, "a": 0, "b": hi, "var": y, "label": "A",
-                "parts": {"right": str(c), "left": "y^{2}", "var": "y", "orientation": "horizontal"},
+            f = None
+        elif case == 14:
+            f = h + x**2
+            _, xb, yb = centroid_from_top(f, 0, b)
+            ans = f"\\left({sp.latex(xb)},{sp.latex(yb)}\\right)"
+            prompt = f"Find the centroid of the region under \\(y={h}+x^2\\), \\(0\\le x\\le {b}\\)."
+            setup = "\\[\\bar x=M_y/A,\\quad \\bar y=M_x/A\\]"
+            marker = {"x": float(xb.evalf()), "y": float(yb.evalf())}
+            top = {"t": "poly", "k": [h, 0, 1]}
+        elif case == 15:
+            f = h * sp.cos(x)
+            # keep nonnegative on [0, π/2]
+            _, xb, yb = centroid_from_top(f, 0, sp.pi / 2)
+            ans = f"\\left({sp.latex(xb)},{sp.latex(yb)}\\right)"
+            prompt = f"Find the centroid under \\(y={h}\\cos x\\) on \\([0,\\pi/2]\\)."
+            setup = "\\[A=\\int f\\,dx,\\quad \\bar x=M_y/A,\\quad \\bar y=M_x/A\\]"
+            marker = {"x": float(xb.evalf()), "y": float(yb.evalf())}
+            top = {"t": "sin", "a": h, "b": 0}
+            b = sp.pi / 2
+        elif case == 16:
+            f = h / (1 + x)
+            _, xb, yb = centroid_from_top(f, 0, b)
+            ans = f"\\left({sp.latex(xb)},{sp.latex(yb)}\\right)"
+            prompt = f"Find the centroid under \\(y=\\dfrac{{{h}}}{{1+x}}\\) on \\([0,{b}]\\)."
+            setup = "\\[\\bar x=M_y/A,\\quad \\bar y=M_x/A\\]"
+            marker = {"x": float(xb.evalf()), "y": float(yb.evalf())}
+            top = {"t": "recip", "a": h}
+        elif case == 17:
+            # Two-rectangle composite (side by side)
+            w1, h1 = 2 + j, 3 + j
+            w2, h2 = 1 + j, 1 + j
+            A1, x1, y1 = w1 * h1, sp.Rational(w1, 2), sp.Rational(h1, 2)
+            A2, x2, y2 = w2 * h2, w1 + sp.Rational(w2, 2), sp.Rational(h2, 2)
+            A = A1 + A2
+            xb = sp.simplify((A1 * x1 + A2 * x2) / A)
+            yb = sp.simplify((A1 * y1 + A2 * y2) / A)
+            ans = f"\\left({sp.latex(xb)},{sp.latex(yb)}\\right)"
+            prompt = (
+                f"A composite body is a \\({w1}\\times {h1}\\) rectangle from \\(x=0\\) to \\(x={w1}\\) "
+                f"joined to a \\({w2}\\times {h2}\\) rectangle from \\(x={w1}\\) to \\(x={w1 + w2}\\). Find the centroid."
+            )
+            setup = "\\[\\bar x=\\frac{A_1x_1+A_2x_2}{A_1+A_2},\\quad \\bar y=\\frac{A_1y_1+A_2y_2}{A_1+A_2}\\]"
+            marker = {"x": float(xb.evalf()), "y": float(yb.evalf())}
+            top = {
+                "t": "piecewise",
+                "segments": [
+                    {"min": 0, "max": float(w1), "curve": {"t": "c", "v": float(h1)}},
+                    {"min": float(w1), "max": float(w1 + w2), "curve": {"t": "c", "v": float(h2)}},
+                ],
             }
-        if "x_min" not in locals():
-            x_min = 0
+            b = w1 + w2
+            parts = [
+                {"x": float(x1), "y": float(y1), "role": "keep", "label": "A1"},
+                {"x": float(x2), "y": float(y2), "role": "keep", "label": "A2"},
+            ]
+            f = None
+        elif case == 18:
+            f = h * sp.sqrt(b - x)
+            _, xb, yb = centroid_from_top(f, 0, b)
+            ans = f"\\left({sp.latex(xb)},{sp.latex(yb)}\\right)"
+            prompt = f"Find the centroid under \\(y={h}\\sqrt{{{b}-x}}\\) on \\([0,{b}]\\)."
+            setup = "\\[\\bar x=M_y/A,\\quad \\bar y=M_x/A\\]"
+            marker = {"x": float(xb.evalf()), "y": float(yb.evalf())}
+            top = {"t": "sqrt", "a": h}
+        elif case == 19:
+            f = h + sp.cos(x)
+            _, xb, yb = centroid_from_top(f, 0, sp.pi)
+            ans = f"\\left({sp.latex(xb)},{sp.latex(yb)}\\right)"
+            prompt = f"Find the centroid under \\(y={h}+\\cos x\\) on \\([0,\\pi]\\)."
+            setup = "Use moments: \\(\\bar x=M_y/A\\), \\(\\bar y=M_x/A\\)."
+            marker = {"x": float(xb.evalf()), "y": float(yb.evalf())}
+            top = {"t": "sin", "a": 1, "b": h}
+            b = sp.pi
+        elif case == 20:
+            # x-bar only for parabola
+            f = h * (1 - (x / b) ** 2)
+            _, xb, yb = centroid_from_top(f, 0, b)
+            ans = f"\\bar x = {sp.latex(xb)}"
+            prompt = f"Find only \\(\\bar x\\) for the region under \\(y={h}(1-x^2/{b*b})\\), \\(0\\le x\\le {b}\\)."
+            setup = "\\[\\bar x=\\frac{\\int x f(x)\\,dx}{\\int f(x)\\,dx}\\]"
+            marker = {"x": float(xb.evalf()), "y": float(yb.evalf())}
+            top = {"t": "poly", "k": [h, 0, -h / (b * b)]}
+        elif case == 21:
+            # y-bar only for parabola
+            f = h * (1 - (x / b) ** 2)
+            _, xb, yb = centroid_from_top(f, 0, b)
+            ans = f"\\bar y = {sp.latex(yb)}"
+            prompt = f"Find only \\(\\bar y\\) for the region under \\(y={h}(1-x^2/{b*b})\\), \\(0\\le x\\le {b}\\)."
+            setup = "\\[\\bar y=\\frac{\\int f(x)^2/2\\,dx}{\\int f(x)\\,dx}\\]"
+            marker = {"x": float(xb.evalf()), "y": float(yb.evalf())}
+            top = {"t": "poly", "k": [h, 0, -h / (b * b)]}
+        elif case == 22:
+            f = h * sp.exp(-x / b)
+            _, xb, yb = centroid_from_top(f, 0, b)
+            ans = f"\\left({sp.latex(xb)},{sp.latex(yb)}\\right)"
+            prompt = f"Find the centroid under \\(y={h}e^{{-x/{b}}}\\) on \\([0,{b}]\\)."
+            setup = "\\[\\bar x=M_y/A,\\quad \\bar y=M_x/A\\]"
+            marker = {"x": float(xb.evalf()), "y": float(yb.evalf())}
+            top = {"t": "exp", "s": h, "a": -1 / b}
+        elif case == 23:
+            # Circular sector approximation: quarter ring not needed — use full triangle via vertices average reminder
+            # Region under y = h*x/b (rising triangle)
+            f = h * x / b
+            _, xb, yb = centroid_from_top(f, 0, b)
+            ans = f"\\left({sp.latex(xb)},{sp.latex(yb)}\\right)"
+            prompt = f"Find the centroid of the right triangle under \\(y=\\dfrac{{{h}}}{{{b}}}x\\), \\(0\\le x\\le {b}\\)."
+            setup = "\\[(\\bar x,\\bar y)=(2b/3,h/3)\\] for this orientation, or compute moments."
+            marker = {"x": float(xb.evalf()), "y": float(yb.evalf())}
+            top = {"t": "lin", "a": h / b}
+        elif case == 24:
+            # Horizontal: between x=0 and x=c-y
+            hi = 2 + j
+            c = hi + (1 + j)
+            width = c - y
+            A = sp.integrate(width, (y, 0, hi))
+            Mx = sp.integrate(y * width, (y, 0, hi))
+            My = sp.integrate((c - y) ** 2 / 2, (y, 0, hi))
+            xb = sp.simplify(My / A)
+            yb = sp.simplify(Mx / A)
+            ans = f"\\left({sp.latex(xb)},{sp.latex(yb)}\\right)"
+            prompt = (
+                f"Use horizontal strips to find the centroid of the region bounded by "
+                f"\\(x=0\\), \\(x={c}-y\\), \\(y=0\\), and \\(y={hi}\\)."
+            )
+            setup = (
+                f"\\[A=\\int_0^{{{hi}}}({c}-y)\\,dy,\\quad"
+                f"\\bar y=\\frac{{1}}{{A}}\\int_0^{{{hi}}}y({c}-y)\\,dy,\\quad"
+                f"\\bar x=\\frac{{1}}{{A}}\\int_0^{{{hi}}}\\frac{{1}}{{2}}({c}-y)^2\\,dy\\]"
+            )
+            marker = {"x": float(xb.evalf()), "y": float(yb.evalf())}
+            top = {"t": "lin", "a": -1, "b": c}
+            b = c
+            f = None
+        elif case == 25:
+            f = h + sp.log(x + 1)
+            _, xb, yb = centroid_from_top(f, 0, b)
+            ans = f"\\left({sp.latex(xb)},{sp.latex(yb)}\\right)"
+            prompt = f"Find the centroid under \\(y={h}+\\ln(x+1)\\) on \\([0,{b}]\\)."
+            setup = "\\[\\bar x=M_y/A,\\quad \\bar y=M_x/A\\]"
+            marker = {"x": float(xb.evalf()), "y": float(yb.evalf())}
+            top = {"t": "log", "a": 1, "b": h}
+        elif case == 26:
+            # Symmetric even arch — x-bar at 0 if centered; use [0,b] half
+            f = h - x**2 / b
+            # ensure positive: h - x^2/b > 0 on [0,b] ⇒ h > b
+            if h <= b:
+                h = b + 1 + j
+                f = h - x**2 / b
+            _, xb, yb = centroid_from_top(f, 0, b)
+            ans = f"\\left({sp.latex(xb)},{sp.latex(yb)}\\right)"
+            prompt = f"Find the centroid under \\(y={h}-\\dfrac{{x^2}}{{{b}}}\\) on \\([0,{b}]\\)."
+            setup = "\\[\\bar x=M_y/A,\\quad \\bar y=M_x/A\\]"
+            marker = {"x": float(xb.evalf()), "y": float(yb.evalf())}
+            top = {"t": "poly", "k": [h, 0, -1 / b]}
+        elif case == 27:
+            f = (h + 1) * sp.sqrt(x) + 1
+            _, xb, yb = centroid_from_top(f, 0, b)
+            ans = f"\\left({sp.latex(xb)},{sp.latex(yb)}\\right)"
+            prompt = f"Find the centroid under \\(y={expr_latex(f)}\\) on \\([0,{b}]\\)."
+            setup = "\\[\\bar x=M_y/A,\\quad \\bar y=M_x/A\\]"
+            marker = {"x": float(xb.evalf()), "y": float(yb.evalf())}
+            top = {"t": "sqrt", "a": h + 1, "b": 1}
+        elif case == 28:
+            # Area only then centroid of constant height = rectangle
+            f = sp.Integer(h)
+            _, xb, yb = centroid_from_top(f, 1, 1 + b)
+            ans = f"\\left({sp.latex(xb)},{sp.latex(yb)}\\right)"
+            prompt = f"Find the centroid of the rectangle \\(1\\le x\\le {1 + b}\\), \\(0\\le y\\le {h}\\)."
+            setup = "A rectangle’s centroid is the center: midpoints of the edges."
+            marker = {"x": float(xb.evalf()), "y": float(yb.evalf())}
+            top = {"t": "c", "v": h}
+            x_min = 1
+            b = 1 + b
+            f = sp.Integer(h)
+        else:
+            # case 29: between two curves y=top and y=bot
+            top_f = h + x
+            bot_f = x
+            A = sp.integrate(top_f - bot_f, (x, 0, b))
+            My = sp.integrate(x * (top_f - bot_f), (x, 0, b))
+            Mx = sp.integrate((top_f**2 - bot_f**2) / 2, (x, 0, b))
+            xb = sp.simplify(My / A)
+            yb = sp.simplify(Mx / A)
+            ans = f"\\left({sp.latex(xb)},{sp.latex(yb)}\\right)"
+            prompt = f"Find the centroid of the region between \\(y={h}+x\\) and \\(y=x\\) on \\([0,{b}]\\)."
+            setup = (
+                "\\[A=\\int(f-g)\\,dx,\\quad"
+                "\\bar x=\\frac{\\int x(f-g)\\,dx}{A},\\quad"
+                "\\bar y=\\frac{\\int\\frac12(f^2-g^2)\\,dx}{A}\\]"
+            )
+            marker = {"x": float(xb.evalf()), "y": float(yb.evalf())}
+            top = {"t": "lin", "a": 1, "b": h}
+            f = None
         # method "centroid" drives strip geometry + balance narration in the visualizer.
+        horizontal_cases = {13, 24}
         vp = {
             "method": "centroid",
-            "orientation": "horizontal" if case == 13 else "vertical",
+            "orientation": "horizontal" if case in horizontal_cases else "vertical",
             "xMin": float(x_min),
-            "xMax": float(b),
+            "xMax": float(b) if not isinstance(b, sp.Basic) else float(sp.N(b)),
             "bottom": {"t": "c", "v": 0},
             "top": top,
             "marker": marker,
-            "sampleLabel": "sample y" if case == 13 else "sample x",
-            "measureLabel": "strip length" if case == 13 else "strip height",
+            "sampleLabel": "sample y" if case in horizontal_cases else "sample x",
+            "measureLabel": "strip length" if case in horizontal_cases else "strip height",
         }
         if case == 13:
             vp["yMin"] = 0
             vp["yMax"] = float(hi)
             vp["left"] = {"t": "pow", "a": 1, "n": 2}
             vp["right"] = {"t": "c", "v": c}
+        if case == 24:
+            vp["yMin"] = 0
+            vp["yMax"] = float(hi)
+            vp["left"] = {"t": "c", "v": 0}
+            vp["right"] = {"t": "lin", "a": -1, "b": c}
         if cutout is not None:
             vp["cutout"] = cutout
         if parts is not None:
@@ -5361,32 +7001,64 @@ def catalog_centroids_conceptual():
         # Full moment work when we have a height function f (integral cases only)
         compute = None
         f_local = locals().get("f")
-        if case == 13:
-            # Custom horizontal-strip centroid solution
+        if case in {13, 24}:
             steps = [
                 step(
                     "Strategy: horizontal strips",
                     "Integrate with respect to \\(y\\). Strip length is right − left; moments use the strip’s mid-\\(x\\) and height \\(y\\).",
                 ),
-                step("Area", f"\\[A=\\int_0^{{{hi}}}({c}-y^2)\\,dy={nice_latex(A)}\\]"),
-                step("Moment for \\(\\bar y\\)", f"\\[M_x=\\int_0^{{{hi}}}y({c}-y^2)\\,dy={nice_latex(Mx)}\\]"),
-                step("Moment for \\(\\bar x\\)", f"\\[M_y=\\int_0^{{{hi}}}\\frac12\\big(({c})^2-(y^2)^2\\big)\\,dy={nice_latex(My)}\\]"),
+                step("Area", f"\\[A={nice_latex(A)}\\]"),
+                step("Moment for \\(\\bar y\\)", f"\\[M_x={nice_latex(Mx)}\\]"),
+                step("Moment for \\(\\bar x\\)", f"\\[M_y={nice_latex(My)}\\]"),
                 step("Centroid", f"\\[\\bar x=M_y/A={sp.latex(xb)},\\quad\\bar y=M_x/A={sp.latex(yb)}\\]"),
                 step("Final", f"\\[(\\bar x,\\bar y)={ans}\\]"),
             ]
             out.append({
                 "source": source, "title": "Centroid", "prompt": prompt,
-                "choices": mc_choices(f"(\\bar x,\\bar y): {ans}", f"2({ans})", f"{ans}/2", f"({c/2},{hi/2})"),
+                "choices": mc_choices(f"(\\bar x,\\bar y): {ans}", f"2({ans})", f"{ans}/2", f"({float(b)/2},{float(hi)/2})"),
                 "steps": steps, "finalAnswer": f"(\\bar x,\\bar y): {ans}",
                 "insight": "Horizontal strips: length = right − left; \\(\\bar x\\) uses average \\(x\\) of each strip.",
                 "visual": "centroid", "difficulty": diff, "visualParams": vp,
                 "equations": equations_kit("centroid", setup),
             })
             continue
-        if f_local is not None and case in {3, 4, 6, 7, 9}:
+        if case == 17:
+            steps = [
+                step("Strategy: composite body", "Add area×center contributions from each rectangle."),
+                step("Rectangle 1", f"\\[A_1={A1},\\quad(\\bar x_1,\\bar y_1)=({sp.latex(x1)},{sp.latex(y1)})\\]"),
+                step("Rectangle 2", f"\\[A_2={A2},\\quad(\\bar x_2,\\bar y_2)=({sp.latex(x2)},{sp.latex(y2)})\\]"),
+                step("Weighted average", setup),
+                step("Final centroid", f"\\[(\\bar x,\\bar y)={ans}\\]"),
+            ]
+            out.append({
+                "source": source, "title": "Centroid", "prompt": prompt,
+                "choices": mc_choices(f"(\\bar x,\\bar y)={ans}", f"2({ans})", f"{ans}/2", f"({sp.latex(x1)},{sp.latex(y1)})"),
+                "steps": steps, "finalAnswer": f"(\\bar x,\\bar y)={ans}",
+                "insight": "Composite centroids weight each piece’s center by its area.",
+                "visual": "centroid", "difficulty": diff, "visualParams": vp,
+                "equations": equations_kit("centroid", setup),
+            })
+            continue
+        if case == 29:
+            steps = [
+                step("Strategy: region between two curves", "Height is top − bottom; moments use the usual strip formulas."),
+                step("Area", f"\\[A={nice_latex(A)}\\]"),
+                step("Moments", f"\\[M_y={nice_latex(My)},\\quad M_x={nice_latex(Mx)}\\]"),
+                step("Centroid", f"\\[(\\bar x,\\bar y)={ans}\\]"),
+            ]
+            out.append({
+                "source": source, "title": "Centroid", "prompt": prompt,
+                "choices": mc_choices(f"(\\bar x,\\bar y): {ans}", f"2({ans})", f"{ans}/2", f"({b/2},{h/2})"),
+                "steps": steps, "finalAnswer": f"(\\bar x,\\bar y): {ans}",
+                "insight": "Between two curves, replace height \\(f\\) by \\(f-g\\) and use \\(\\frac12(f^2-g^2)\\) for the vertical moment.",
+                "visual": "centroid", "difficulty": diff, "visualParams": vp,
+                "equations": equations_kit("centroid", setup),
+            })
+            continue
+        if f_local is not None and case in {3, 4, 6, 7, 9, 14, 16, 18, 20, 21, 22, 23, 25, 26, 27, 28}:
+            compute = {"f": f_local, "a": x_min if case == 28 else 0, "b": b}
+        elif f_local is not None and case in {8, 15, 19}:
             compute = {"f": f_local, "a": 0, "b": b}
-        elif f_local is not None and case == 8:
-            compute = {"f": f_local, "a": 0, "b": sp.pi}
         elif f_local is not None and case == 12:
             compute = {"f": f_local, "a": 0, "b": b}
         # Explicit algebra for simple closed forms (no skipping)
@@ -5457,8 +7129,9 @@ def catalog_centroids_conceptual():
 
 
 def catalog_inertia_conceptual():
+    """30 distinct second-moment concepts; difficulty by index (20/20/10)."""
     out = []
-    N_INERT = 16
+    N_INERT = 30
     for i in range(PER_TOPIC):
         case = i % N_INERT
         diff = difficulty_for_index(i)
@@ -5469,6 +7142,7 @@ def catalog_inertia_conceptual():
         source = f"OpenStax Vol. 1 §6.6 / Briggs §6.7 inertia concept {case + 1}, item {i + 1}"
         axis_extra = {}
         compute = None
+        x_min = 0
         if case == 0:
             f, xmax = sp.Integer(h), b
             I = sp.integrate(f**3 / 3, (x, 0, xmax))
@@ -5658,7 +7332,7 @@ def catalog_inertia_conceptual():
                 "display_integrand": f"\\frac{{1}}{{3}}\\big(({c})^3-y^6\\big)",
                 "setup_display": setup,
             }
-        else:
+        elif case == 15:
             # Horizontal strips: I_x = ∫ y^2 (right-left) dy
             hi = 2 + j
             c = hi * hi
@@ -5685,6 +7359,185 @@ def catalog_inertia_conceptual():
                 "display_integrand": f"y^{{2}}({c}-y^{{2}})",
                 "setup_display": setup,
             }
+        elif case == 16:
+            f, xmax = h + sp.sin(x), sp.pi
+            I = sp.integrate(f**3 / 3, (x, 0, xmax))
+            label = "I_x"
+            prompt = f"Find \\(I_x\\) under \\(y={h}+\\sin x\\) on \\([0,\\pi]\\)."
+            setup = "\\[I_x=\\int_0^{\\pi}\\frac{f(x)^3}{3}\\,dx\\]"
+            top = {"t": "sin", "a": 1, "b": h}
+            compute = {"expr": f**3 / 3, "a": 0, "b": xmax, "label": "I_x"}
+        elif case == 17:
+            f, xmax = h + sp.exp(-x), b
+            I = sp.integrate(f**3 / 3, (x, 0, xmax))
+            label = "I_x"
+            prompt = f"Find \\(I_x\\) under \\(y={h}+e^{{-x}}\\) on \\([0,{b}]\\)."
+            setup = f"\\[I_x=\\int_0^{{{b}}}\\frac{{f(x)^3}}{{3}}\\,dx\\]"
+            top = {"t": "exp", "s": 1, "a": -1, "b": h}
+            compute = {"expr": f**3 / 3, "a": 0, "b": xmax, "label": "I_x"}
+        elif case == 18:
+            f, xmax = h * sp.sqrt(x), b
+            I = sp.integrate(x**2 * f, (x, 0, xmax))
+            label = "I_y"
+            prompt = f"Find \\(I_y\\) under \\(y={h}\\sqrt{{x}}\\) on \\([0,{b}]\\)."
+            setup = f"\\[I_y=\\int_0^{{{b}}}x^2 f(x)\\,dx\\]"
+            top = {"t": "sqrt", "a": h}
+            compute = {"expr": x**2 * f, "a": 0, "b": xmax, "label": "I_y"}
+        elif case == 19:
+            f, xmax = 1 + x**2, b
+            I = sp.integrate(f**3 / 3, (x, 0, xmax))
+            label = "I_x"
+            prompt = f"Find \\(I_x\\) under \\(y=1+x^2\\) on \\([0,{b}]\\)."
+            setup = f"\\[I_x=\\int_0^{{{b}}}\\frac{{(1+x^2)^3}}{{3}}\\,dx\\]"
+            top = {"t": "poly", "k": [1, 0, 1]}
+            compute = {"expr": f**3 / 3, "a": 0, "b": xmax, "label": "I_x"}
+        elif case == 20:
+            f, xmax = h * x / b, b
+            I = sp.integrate(f**3 / 3, (x, 0, xmax))
+            label = "I_x"
+            prompt = f"Find \\(I_x\\) for the triangle under \\(y=\\dfrac{{{h}}}{{{b}}}x\\) on \\([0,{b}]\\)."
+            setup = "\\[I_x=\\int_0^b\\frac{f(x)^3}{3}\\,dx\\]"
+            top = {"t": "lin", "a": h / b}
+            compute = {"expr": f**3 / 3, "a": 0, "b": xmax, "label": "I_x"}
+        elif case == 21:
+            f, xmax = h * x / b, b
+            I = sp.integrate(x**2 * f, (x, 0, xmax))
+            label = "I_y"
+            prompt = f"Find \\(I_y\\) for the triangle under \\(y=\\dfrac{{{h}}}{{{b}}}x\\) on \\([0,{b}]\\)."
+            setup = "\\[I_y=\\int_0^b x^2 f(x)\\,dx\\]"
+            top = {"t": "lin", "a": h / b}
+            compute = {"expr": x**2 * f, "a": 0, "b": xmax, "label": "I_y"}
+        elif case == 22:
+            # Polar moment for triangle
+            f, xmax = h * (1 - x / b), b
+            Ix = sp.integrate(f**3 / 3, (x, 0, xmax))
+            Iy = sp.integrate(x**2 * f, (x, 0, xmax))
+            I = sp.simplify(Ix + Iy)
+            label = "J_O"
+            prompt = f"Find \\(J_O=I_x+I_y\\) for the triangle under \\(y={h}(1-x/{b})\\)."
+            setup = "\\[J_O=I_x+I_y\\]"
+            top = {"t": "lin", "a": -h / b, "b": h}
+            steps = [
+                step("Strategy: polar moment", "Compute \\(I_x\\) and \\(I_y\\), then add."),
+            ] + full_definite_eval_steps(f**3 / 3, 0, xmax, x, label="I_x", scale=1) + \
+              full_definite_eval_steps(x**2 * f, 0, xmax, x, label="I_y", scale=1) + [
+                step("Add", f"\\[J_O={nice_latex(I)}\\]"),
+            ]
+            out.append({
+                "source": source, "title": "Moment of inertia", "prompt": prompt,
+                "choices": mc_choices(f"{label} = {sp.latex(I)}", f"2J", f"J/2", f"{b*h}"),
+                "steps": steps, "finalAnswer": f"{label} = {sp.latex(I)}",
+                "insight": "Polar moment is the sum of the planar second moments.",
+                "visual": "inertia", "difficulty": diff,
+                "visualParams": {"method": "area", "xMin": 0, "xMax": float(xmax), "bottom": {"t": "c", "v": 0}, "top": top},
+                "equations": equations_kit("inertia", setup),
+            })
+            continue
+        elif case == 23:
+            f, xmax = h + sp.log(x + 1), b
+            I = sp.integrate(x**2 * f, (x, 0, xmax))
+            label = "I_y"
+            prompt = f"Find \\(I_y\\) under \\(y={h}+\\ln(x+1)\\) on \\([0,{b}]\\)."
+            setup = f"\\[I_y=\\int_0^{{{b}}}x^2 f(x)\\,dx\\]"
+            top = {"t": "log", "a": 1, "b": h}
+            compute = {"expr": x**2 * f, "a": 0, "b": xmax, "label": "I_y"}
+        elif case == 24:
+            # I about x = -d for rectangle
+            d = 1 + j
+            f, xmax = sp.Integer(h), b
+            I = sp.integrate((x + d) ** 2 * f, (x, 0, xmax))
+            label = f"I_{{x=-{d}}}"
+            prompt = (
+                f"Find the second moment of the rectangle \\(0\\le x\\le {b}\\), \\(0\\le y\\le {h}\\) "
+                f"about the vertical line \\(x=-{d}\\)."
+            )
+            setup = f"\\[I_{{x=-{d}}}=\\int_0^{{{b}}}(x+{d})^2({h})\\,dx\\]"
+            top = {"t": "c", "v": h}
+            axis_extra = {"axisX": -d, "axisLabel": f"x = -{d}"}
+            compute = {"expr": (x + d) ** 2 * f, "a": 0, "b": xmax, "label": label}
+        elif case == 25:
+            f, xmax = h * (1 - (x / b) ** 2), b
+            # Centroidal I_x for parabola
+            A = sp.integrate(f, (x, 0, xmax))
+            ybar = sp.simplify(sp.integrate(f**2 / 2, (x, 0, xmax)) / A)
+            Ix = sp.simplify(sp.integrate(f**3 / 3, (x, 0, xmax)))
+            I = sp.simplify(Ix - A * ybar**2)
+            label = "I_{\\bar x}"
+            prompt = f"Find centroidal \\(I_{{\\bar x}}\\) for the parabolic region under \\(y={h}(1-x^2/{b*b})\\)."
+            setup = "\\[I_{\\bar x}=I_x-A\\bar y^2\\]"
+            top = {"t": "poly", "k": [h, 0, -h / (b * b)]}
+            axis_extra = {"axisY": float(ybar.evalf()), "axisLabel": "centroidal x-axis"}
+            steps = [
+                step("Strategy: parallel-axis shift", "Compute \\(I_x\\), area, and \\(\\bar y\\), then subtract \\(A\\bar y^2\\)."),
+                step("Results", f"\\[I_x={nice_latex(Ix)},\\ A={nice_latex(A)},\\ \\bar y={nice_latex(ybar)}\\]"),
+                step("Centroidal moment", f"\\[I_{{\\bar x}}={nice_latex(I)}\\]"),
+            ]
+            out.append({
+                "source": source, "title": "Moment of inertia", "prompt": prompt,
+                "choices": mc_choices(f"{label} = {sp.latex(I)}", f"2I", f"I/2", f"{A}"),
+                "steps": steps, "finalAnswer": f"{label} = {sp.latex(I)}",
+                "insight": "Centroidal second moment uses the parallel-axis theorem: \\(I_{\\bar x}=I_x-A\\bar y^2\\).",
+                "visual": "inertia", "difficulty": diff,
+                "visualParams": {"method": "area", "xMin": 0, "xMax": float(xmax), "bottom": {"t": "c", "v": 0}, "top": top, **axis_extra},
+                "equations": equations_kit("inertia", setup),
+            })
+            continue
+        elif case == 26:
+            # I_y of semicircle about y-axis (diameter on x-axis)
+            R = 2 + j
+            I = sp.pi * R**4 / 8  # for upper semicircle about y-axis (vertical diameter) is different
+            # About the y-axis (perpendicular diameter): I_y = πR^4/8 for semicircle
+            I = sp.pi * R**4 / 8
+            label = "I_y"
+            prompt = f"Find \\(I_y\\) about the vertical diameter for the upper semicircular lamina of radius \\({R}\\)."
+            setup = "\\[I_y=\\frac{\\pi R^4}{8}\\]"
+            top = {"t": "circle-upper", "R": R, "cx": 0, "cy": 0}
+            xmax = R
+            x_min = -R
+            axis_extra = {"axisX": 0, "axisLabel": "y-axis diameter"}
+            compute = {"expr": x**2 * sp.sqrt(R**2 - x**2), "a": -R, "b": R, "label": "I_y", "value": I}
+        elif case == 27:
+            f, xmax = h + x, b
+            I = sp.integrate(x**2 * f, (x, 0, xmax))
+            label = "I_y"
+            prompt = f"Find \\(I_y\\) under \\(y={h}+x\\) on \\([0,{b}]\\)."
+            setup = f"\\[I_y=\\int_0^{{{b}}}x^2({h}+x)\\,dx\\]"
+            top = {"t": "lin", "a": 1, "b": h}
+            compute = {"expr": x**2 * f, "a": 0, "b": xmax, "label": "I_y"}
+        elif case == 28:
+            # Horizontal: I_y for region 0≤y≤h, 0≤x≤c-y
+            hi = 2 + j
+            c = hi + 2 + j
+            I = sp.integrate((c - y) ** 3 / 3, (y, 0, hi))
+            label = "I_y"
+            prompt = (
+                f"Use horizontal strips to find \\(I_y\\) for the region bounded by "
+                f"\\(x=0\\), \\(x={c}-y\\), \\(y=0\\), and \\(y={hi}\\)."
+            )
+            setup = f"\\[I_y=\\int_0^{{{hi}}}\\frac{{1}}{{3}}({c}-y)^3\\,dy\\]"
+            top = {"t": "lin", "a": -1, "b": c}
+            xmax = c
+            axis_extra = {
+                "orientation": "horizontal",
+                "yMin": 0,
+                "yMax": hi,
+                "left": {"t": "c", "v": 0},
+                "right": {"t": "lin", "a": -1, "b": c},
+            }
+            compute = {
+                "expr": (c - y) ** 3 / 3, "a": 0, "b": hi, "var": y, "label": "I_y",
+                "display_integrand": f"\\frac{{1}}{{3}}({c}-y)^3",
+                "setup_display": setup,
+            }
+        else:
+            # case 29: I_x under y = h cos x on [0, π/2]
+            f, xmax = h * sp.cos(x), sp.pi / 2
+            I = sp.integrate(f**3 / 3, (x, 0, xmax))
+            label = "I_x"
+            prompt = f"Find \\(I_x\\) under \\(y={h}\\cos x\\) on \\([0,\\pi/2]\\)."
+            setup = "\\[I_x=\\int_0^{\\pi/2}\\frac{f(x)^3}{3}\\,dx\\]"
+            top = {"t": "sin", "a": h, "b": 0}
+            compute = {"expr": f**3 / 3, "a": 0, "b": xmax, "label": "I_x"}
         if case == 2:
             # Polar moment = I_x + I_y with both shown fully
             f, xmax = sp.Integer(h), b
@@ -5811,7 +7664,7 @@ def build_bank():
                 f"{topic}: difficulty mix {counts}, need "
                 f"easy={DIFFICULTY_EASY}, medium={DIFFICULTY_MEDIUM}, hard={DIFFICULTY_HARD}"
             )
-        min_concepts = 40 if topic == "applications" else 10
+        min_concepts = 40 if topic == "applications" else 30
         if len(concepts) < min_concepts:
             raise SystemExit(
                 f"{topic}: only {len(concepts)} distinct concepts, need ≥ {min_concepts} "

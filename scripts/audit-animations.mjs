@@ -435,7 +435,8 @@ function collectSpecsFromProblem(problem, topic, difficulty, index) {
   const baseId = `${topic}/${difficulty}#${index}`;
   const label = problem.source || problem.visualKey || problem.title;
 
-  if (!problem.visualSpec) {
+  const { baseSpec, validation } = materializeVisualExample(problem);
+  if (!baseSpec) {
     entries.push({
       id: baseId,
       label,
@@ -446,16 +447,26 @@ function collectSpecsFromProblem(problem, topic, difficulty, index) {
         {
           code: "no-visual-spec",
           severity: "error",
-          message: "Problem has no visualSpec (attachVisualSpec found no match; legacy fallback may differ)",
-          fix: "Add entry to VISUAL_BY_SOURCE or VISUAL_BY_KEY"
+          message: "Problem has no visualSpec after materializeVisualExample",
+          fix: "Add VISUAL_BY_SOURCE / VISUAL_BY_KEY or complete generator visualParams"
         }
       ]
     });
     return entries;
   }
 
-  const primary = structuredClone(problem.visualSpec);
+  const primary = structuredClone(baseSpec);
   const { issues: primaryIssues } = auditSpec(primary, { id: baseId, variant: "primary" });
+  if (!validation.ok) {
+    for (const err of validation.errors) {
+      primaryIssues.push({
+        code: "materialize-validation",
+        severity: "warn",
+        message: err,
+        fix: "Emit complete generator-owned visualParams"
+      });
+    }
+  }
   entries.push({
     id: baseId,
     label,
