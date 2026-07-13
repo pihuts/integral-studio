@@ -330,7 +330,8 @@ button:not(:disabled), select, input { cursor: pointer; }
 }
 
 .visual-panel,
-.problem-panel {
+.problem-panel,
+.solution-panel {
   min-width: 0;
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -338,6 +339,8 @@ button:not(:disabled), select, input { cursor: pointer; }
 }
 
 .visual-panel {
+  grid-column: 1;
+  grid-row: 1 / -1;
   position: sticky;
   /* Clear sticky topbar; leave room above floating dock */
   top: calc(48px + env(safe-area-inset-top, 0px));
@@ -346,6 +349,14 @@ button:not(:disabled), select, input { cursor: pointer; }
   height: calc(100dvh - 56px - env(safe-area-inset-top, 0px) - 4rem);
   max-height: calc(100dvh - 56px - env(safe-area-inset-top, 0px) - 4rem);
   overflow: hidden;
+}
+
+.problem-panel {
+  grid-column: 2;
+}
+
+.solution-panel {
+  grid-column: 2;
 }
 
 /* Arrangement: title + steps + help on one row; caption under — not smaller type */
@@ -1076,17 +1087,13 @@ button:not(:disabled), select, input { cursor: pointer; }
   }
 }
 
-/* —— Solution (learner-focused) —— */
+/* —— Solution (learner-focused; sibling of problem/viz) —— */
 .solution-panel {
-  margin: 16px -18px -18px;
-  padding: 0;
+  margin: 0;
+  padding: 0 0 12px;
   overflow: hidden;
-  border-top: 1px solid var(--line);
   scroll-margin-top: 72px;
-}
-
-.solution-panel.is-open {
-  border-top-color: var(--line);
+  scroll-margin-bottom: calc(5.5rem + env(safe-area-inset-bottom, 0px));
 }
 
 .solution-banner {
@@ -1114,7 +1121,7 @@ button:not(:disabled), select, input { cursor: pointer; }
 }
 
 .solution-equations {
-  margin: 0 14px 4px;
+  margin: 12px 14px 4px;
   padding: 12px 14px 10px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--line);
@@ -1311,37 +1318,60 @@ button:not(:disabled), select, input { cursor: pointer; }
   }
 }
 
-/* Tablet / narrow laptop: single column, viz still above problem in source order */
+/* Tablet / phone: single column — problem → viz → solution */
 @media (max-width: 860px) {
-  .content-grid { grid-template-columns: 1fr; }
-  /* On touch-sized layouts, put the task before its supporting visualization. */
+  .content-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  /* Explicit reading order: task, then visualization, then worked solution */
   .problem-panel { order: 1; }
   .visual-panel { order: 2; }
+  .solution-panel { order: 3; }
+
+  .visual-panel,
+  .problem-panel,
+  .solution-panel {
+    grid-column: auto;
+    grid-row: auto;
+  }
+
   .visual-panel {
     position: static;
     height: auto;
     max-height: none;
   }
+
+  .workspace {
+    padding-bottom: calc(5.75rem + env(safe-area-inset-bottom, 0px));
+  }
+
   #three-host,
   .viz-host {
     flex: none;
     height: min(42svh, 420px);
     min-height: 300px;
   }
+
   .visual-head-row {
     flex-wrap: wrap;
     row-gap: 6px;
   }
+
   .visual-head.compact h2 {
     max-width: calc(100% - 44px);
     white-space: normal;
     overflow: visible;
     text-overflow: unset;
   }
+
   .step-track {
     flex: 1 1 100%;
     order: 3;
   }
+
   .step-detail {
     white-space: normal;
     overflow: visible;
@@ -1349,7 +1379,7 @@ button:not(:disabled), select, input { cursor: pointer; }
   }
 }
 
-/* Phone: problem first (task), visualization second (support) */
+/* Phone refinements */
 @media (max-width: 600px) {
   .topbar {
     gap: 8px;
@@ -1375,30 +1405,17 @@ button:not(:disabled), select, input { cursor: pointer; }
     white-space: nowrap;
   }
 
-  .content-grid {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-
-  .problem-panel { order: 1; }
-  .visual-panel { order: 2; }
-
   .workspace {
-    /* Extra bottom room for floating dock */
-    padding: 10px 10px calc(5.5rem + env(safe-area-inset-bottom, 0px));
+    /* Extra bottom room so last solution content clears the floating dock */
+    padding: 10px 10px calc(6.25rem + env(safe-area-inset-bottom, 0px));
   }
 
   .problem-panel {
     padding: 14px 14px 16px;
   }
 
-  .problem-panel .solution-panel {
-    margin: 16px -14px -16px;
-  }
-
-.problem-panel h1,
-.problem-panel h2 {
+  .problem-panel h1,
+  .problem-panel h2 {
     font-size: 1.5rem;
     margin-bottom: 14px;
   }

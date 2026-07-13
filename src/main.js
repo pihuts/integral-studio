@@ -647,7 +647,7 @@ function renderPractice(options = {}) {
               </div>
             </div>
           </section>
-          <section class="problem-panel${state.showSolution ? " solution-open" : ""}" aria-labelledby="question-title">
+          <section class="problem-panel" aria-labelledby="question-title">
             <div class="question-top">
               <span class="question-number">${escape(p.title)}</span>
               <span class="question-index">Q${state.questionIndex + 1}</span>
@@ -686,8 +686,8 @@ function renderPractice(options = {}) {
               <div class="feedback ${correct ? "positive" : "negative"}" id="question-feedback" role="status" aria-live="polite">
                 <p class="feedback-message"><strong>${correct ? "Correct" : "Incorrect"}</strong> — ${
                   correct
-                    ? "Worked solution below."
-                    : "Correct choice highlighted. Steps below."
+                    ? "Visualization and worked solution below."
+                    : "Correct choice highlighted. Visualization and steps below."
                 }</p>
               </div>
             `
@@ -700,8 +700,8 @@ function renderPractice(options = {}) {
                   : `<button type="button" id="check" class="primary" ${!state.selected ? "disabled" : ""}>Check answer</button>`
               }
             </div>
-            ${state.showSolution ? renderSolution(p, correct) : ""}
           </section>
+          ${state.showSolution ? renderSolution(p, correct) : ""}
         </div>
         ${renderProblemNavigator()}
       </main>
@@ -720,9 +720,11 @@ function renderPractice(options = {}) {
   if (state.showSolution) {
     requestAnimationFrame(() => {
       const feedback = document.querySelector("#question-feedback");
+      const visual = document.querySelector(".visual-panel");
       const panel = document.querySelector("#solution-panel");
-      // Keep choice + feedback in view; only jump to solution on compact layouts.
-      const target = isCompactViewport() ? panel || feedback : feedback || panel;
+      // Compact: stay on feedback so flow is problem → viz → sol while scrolling.
+      // Desktop: keep choice/feedback in view; solution sits under the problem column.
+      const target = isCompactViewport() ? feedback || visual : feedback || panel;
       if (target) {
         target.scrollIntoView({
           behavior: isCompactViewport() ? "auto" : motion,
