@@ -332,7 +332,7 @@ button:not(:disabled), select, input { cursor: pointer; }
   min-width: 0;
   margin: 0 auto;
   /* Clear floating question dock (single-row capsule) */
-  padding: 6px 8px calc(5rem + env(safe-area-inset-bottom, 0px));
+  padding: 6px 8px calc(3.75rem + env(safe-area-inset-bottom, 0px));
 }
 
 .content-grid {
@@ -824,19 +824,6 @@ button:not(:disabled), select, input { cursor: pointer; }
   color: var(--on-primary);
 }
 
-.question-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 10px;
-  margin-top: 12px;
-}
-
-.question-actions .primary {
-  flex: 0 1 auto;
-}
-
 .primary,
 .secondary {
   min-height: 48px;
@@ -900,31 +887,30 @@ button:not(:disabled), select, input { cursor: pointer; }
   border: 0;
 }
 
-/* Floating question dock — prev · pills · next only */
+/* Floating question dock — prev · “2 of 50” · Check/Next */
 .problem-navigator {
   position: fixed;
   left: 50%;
-  bottom: max(14px, env(safe-area-inset-bottom, 0px));
+  bottom: max(10px, env(safe-area-inset-bottom, 0px));
   z-index: var(--z-dock);
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   width: max-content;
-  /* 100dvw avoids classic 100vw scrollbar/safe-area bleed that widens mobile layout */
-  max-width: min(36rem, calc(100dvw - 24px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)));
+  max-width: calc(100dvw - 16px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px));
   margin: 0;
-  padding: 6px 8px;
+  padding: 5px 6px 5px 5px;
   border: 1px solid var(--dock-line);
   border-radius: 999px;
   background: var(--dock-bg);
   color: var(--dock-ink);
   box-shadow:
-    0 12px 40px color-mix(in srgb, #000 38%, transparent),
-    0 2px 8px color-mix(in srgb, #000 22%, transparent),
+    0 10px 28px color-mix(in srgb, #000 34%, transparent),
+    0 1px 4px color-mix(in srgb, #000 18%, transparent),
     inset 0 1px 0 color-mix(in srgb, #fff 10%, transparent);
-  backdrop-filter: blur(18px) saturate(1.2);
-  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  backdrop-filter: blur(16px) saturate(1.15);
+  -webkit-backdrop-filter: blur(16px) saturate(1.15);
   transform: translateX(-50%);
 }
 
@@ -934,8 +920,7 @@ button:not(:disabled), select, input { cursor: pointer; }
   }
 }
 
-.problem-navigator button:focus-visible,
-.problem-navigator input:focus-visible {
+.problem-navigator button:focus-visible {
   outline: 2px solid color-mix(in srgb, #fff 75%, var(--blue));
   outline-offset: 2px;
   box-shadow: 0 0 0 4px color-mix(in srgb, #fff 18%, transparent);
@@ -965,106 +950,62 @@ button:not(:disabled), select, input { cursor: pointer; }
 
 .problem-nav-step {
   flex: 0 0 auto;
-  min-height: 40px;
-  min-width: 40px;
+  min-height: 36px;
+  min-width: 36px;
   padding: 0;
   border-radius: 999px;
-  font-size: 1rem;
+  font-size: 0.9375rem;
   line-height: 1;
 }
 
-.problem-pills {
-  display: flex;
-  justify-content: center;
-  flex-wrap: nowrap;
-  gap: 2px;
-  min-width: 0;
-  max-width: min(22rem, calc(100dvw - 7.5rem - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)));
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-  padding: 0 2px;
-  scrollbar-width: none;
-}
-
-.problem-pills::-webkit-scrollbar {
-  display: none;
-}
-
-.problem-pill {
-  position: relative;
-  display: grid;
-  place-items: center;
+.problem-nav-position {
   flex: 0 0 auto;
-  width: 32px;
-  height: 32px;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
+  margin: 0;
+  padding: 0 2px;
   color: var(--dock-muted);
   font-family: var(--font-ui);
-  font-size: 0.75rem;
-  font-weight: 700;
-  transition: background-color 140ms var(--ease-out), color 140ms var(--ease-out);
-}
-
-.problem-pill-num {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
   line-height: 1;
+  white-space: nowrap;
+  user-select: none;
 }
 
-.problem-pill-icon {
-  position: absolute;
-  right: -1px;
-  bottom: -1px;
-  display: grid;
-  place-items: center;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  border: 1px solid var(--dock-bg-solid);
-  font-size: 0.5rem;
+.problem-nav-current {
+  color: var(--dock-ink);
   font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.problem-nav-of {
+  margin: 0 0.28em;
+  font-weight: 500;
+  opacity: 0.85;
+}
+
+.problem-nav-total {
+  font-variant-numeric: tabular-nums;
+}
+
+.problem-nav-action {
+  flex: 0 0 auto;
+  min-height: 40px;
+  min-width: 5.5rem;
+  margin: 0;
+  padding: 0 18px;
+  border-radius: 999px;
+  font-size: 0.9375rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
   line-height: 1;
-  color: var(--on-primary);
-}
-
-.problem-pill.correct .problem-pill-icon {
-  background: var(--teal);
-  border-color: var(--dock-bg-solid);
-}
-
-.problem-pill.incorrect .problem-pill-icon {
-  background: var(--red);
-  border-color: var(--dock-bg-solid);
-}
-
-.problem-pill:hover {
-  background: var(--dock-elevated);
-  color: var(--dock-ink);
-}
-
-/* Active like the reference “home” capsule */
-.problem-pill.active {
-  background: var(--dock-elevated-strong);
-  color: var(--dock-ink);
+  white-space: nowrap;
   box-shadow: none;
-}
-
-.problem-pill.correct {
-  color: color-mix(in srgb, #7dcea0 85%, #fff);
-}
-
-.problem-pill.incorrect {
-  color: color-mix(in srgb, #f0a0a8 90%, #fff);
-}
-
-.problem-pill.active.correct,
-.problem-pill.active.incorrect {
-  background: var(--dock-elevated-strong);
 }
 
 @media (prefers-reduced-motion: reduce) {
   .problem-nav-step,
-  .problem-pill {
+  .problem-nav-action {
     transition: none;
   }
 }
@@ -1079,7 +1020,7 @@ button:not(:disabled), select, input { cursor: pointer; }
   overflow-y: visible;
   max-width: 100%;
   scroll-margin-top: 72px;
-  scroll-margin-bottom: calc(5.5rem + env(safe-area-inset-bottom, 0px));
+  scroll-margin-bottom: calc(4rem + env(safe-area-inset-bottom, 0px));
 }
 
 /* Shared math scroller: parent must own width so overflow-x actually scrolls */
@@ -1404,7 +1345,7 @@ button:not(:disabled), select, input { cursor: pointer; }
   }
 
   .workspace {
-    padding-bottom: calc(5.75rem + env(safe-area-inset-bottom, 0px));
+    padding-bottom: calc(4.25rem + env(safe-area-inset-bottom, 0px));
   }
 
   #three-host,
@@ -1500,7 +1441,7 @@ button:not(:disabled), select, input { cursor: pointer; }
 
   .workspace {
     /* Extra bottom room so last solution content clears the floating dock */
-    padding: 10px 10px calc(6.25rem + env(safe-area-inset-bottom, 0px));
+    padding: 10px 10px calc(4rem + env(safe-area-inset-bottom, 0px));
   }
 
   .problem-panel {
@@ -1550,50 +1491,32 @@ button:not(:disabled), select, input { cursor: pointer; }
     -webkit-overflow-scrolling: touch;
   }
 
-  .question-actions {
-    flex-direction: column-reverse;
-    align-items: stretch;
-    gap: 8px;
-    margin-top: 12px;
-  }
-
-  .question-actions button {
-    flex: 1;
-    width: 100%;
-  }
-
   .problem-navigator {
     left: 50%;
     right: auto;
-    bottom: max(10px, env(safe-area-inset-bottom, 0px));
+    bottom: max(8px, env(safe-area-inset-bottom, 0px));
     width: max-content;
-    max-width: calc(100dvw - 16px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px));
-    padding: 5px 6px;
-    gap: 2px;
+    max-width: calc(100dvw - 12px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px));
+    padding: 4px 5px 4px 4px;
+    gap: 6px;
     border-radius: 999px;
     transform: translateX(-50%);
   }
 
   .problem-nav-step {
-    min-height: 40px;
-    min-width: 40px;
+    min-height: 36px;
+    min-width: 36px;
   }
 
-  .problem-pills {
-    max-width: calc(100dvw - 7rem - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px));
-    gap: 2px;
-  }
-
-  .problem-pill {
-    width: 36px;
-    height: 36px;
+  .problem-nav-position {
     font-size: 0.75rem;
   }
 
-  .problem-pill-icon {
-    width: 12px;
-    height: 12px;
-    font-size: 0.5rem;
+  .problem-nav-action {
+    min-height: 40px;
+    min-width: 5.25rem;
+    padding: 0 16px;
+    font-size: 0.875rem;
   }
 
   .topic-grid {
@@ -1801,6 +1724,17 @@ button:not(:disabled), select, input { cursor: pointer; }
     min-height: 44px;
   }
 
+  /* Dock stays compact; primary action keeps a solid tap target */
+  .problem-navigator .secondary,
+  .problem-navigator .problem-nav-step {
+    min-height: 36px;
+  }
+
+  .problem-navigator .primary,
+  .problem-navigator .problem-nav-action {
+    min-height: 44px;
+  }
+
   .step-item {
     min-height: 44px;
     padding: 6px 12px;
@@ -1812,14 +1746,9 @@ button:not(:disabled), select, input { cursor: pointer; }
     height: 44px;
   }
 
-  .problem-pill {
-    width: 44px;
-    height: 44px;
-  }
-
   .problem-nav-step {
-    min-height: 44px;
-    min-width: 44px;
+    min-height: 36px;
+    min-width: 36px;
   }
 
   .model-controls input[type="range"] {
@@ -1839,11 +1768,6 @@ button:not(:disabled), select, input { cursor: pointer; }
     color: var(--ink);
   }
 
-  .problem-pill:active {
-    border-color: transparent;
-    background: var(--dock-elevated-strong);
-    color: var(--dock-ink);
-  }
 }
 
 /* Touch devices stick hover:true after tap — neutralize sticky “hovered” look */
@@ -1888,32 +1812,6 @@ button:not(:disabled), select, input { cursor: pointer; }
     border-color: var(--blue);
     background: var(--blue-soft);
     color: var(--ink);
-  }
-
-  .problem-pill:hover {
-    border-color: transparent;
-    background: transparent;
-    color: var(--dock-muted);
-    box-shadow: none;
-  }
-
-  .problem-pill.active:hover {
-    border-color: transparent;
-    background: var(--dock-elevated-strong);
-    color: var(--dock-ink);
-    box-shadow: none;
-  }
-
-  .problem-pill.correct:hover {
-    border-color: transparent;
-    background: transparent;
-    color: color-mix(in srgb, #7dcea0 85%, #fff);
-  }
-
-  .problem-pill.incorrect:hover {
-    border-color: transparent;
-    background: transparent;
-    color: color-mix(in srgb, #f0a0a8 90%, #fff);
   }
 
   .problem-navigator .secondary:hover:not(:disabled),

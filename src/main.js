@@ -114,36 +114,21 @@ function choiceAriaLabel(option, index, problem) {
   return base;
 }
 
-function pillStatusIcon(status) {
-  if (status === true) return '<span class="problem-pill-icon" aria-hidden="true">✓</span>';
-  if (status === false) return '<span class="problem-pill-icon" aria-hidden="true">✕</span>';
-  return "";
-}
-
-const QUESTION_BAND = 10;
-
-function questionBandStart(index) {
-  return Math.floor(index / QUESTION_BAND) * QUESTION_BAND;
-}
-
 function renderProblemNavigator() {
   const current = state.questionIndex;
-  const bandStart = questionBandStart(current);
-  const bandEnd = Math.min(bandStart + QUESTION_BAND, QUESTIONS_PER_TOPIC);
-
-  const pills = Array.from({ length: bandEnd - bandStart }, (_, offset) => {
-    const index = bandStart + offset;
-    const status = problemStatus(index);
-    const statusWord = status === true ? ", correct" : status === false ? ", incorrect" : "";
-    return `<button type="button" class="problem-pill ${index === current ? "active" : ""} ${status === true ? "correct" : ""} ${status === false ? "incorrect" : ""}" data-question="${index}" aria-label="Question ${index + 1} of ${QUESTIONS_PER_TOPIC}${statusWord}" aria-current="${index === current ? "step" : "false"}"><span class="problem-pill-num">${index + 1}</span>${pillStatusIcon(status)}</button>`;
-  }).join("");
+  const action = state.checked
+    ? `<button type="button" id="next" class="primary problem-nav-action">Next</button>`
+    : `<button type="button" id="check" class="primary problem-nav-action" ${!state.selected ? "disabled" : ""}>Check</button>`;
 
   return `
     <nav class="problem-navigator" aria-label="Questions">
       <button type="button" class="secondary problem-nav-step" data-question-nav="previous" ${current === 0 ? "disabled" : ""} aria-label="Previous question">←</button>
-      <div class="problem-pills" role="group" aria-label="Questions ${bandStart + 1} to ${bandEnd}">${pills}</div>
-      <button type="button" class="secondary problem-nav-step" data-question-nav="next" ${current === QUESTIONS_PER_TOPIC - 1 ? "disabled" : ""} aria-label="Next question">→</button>
-      <span class="sr-only" aria-live="polite">Question ${current + 1} of ${QUESTIONS_PER_TOPIC}</span>
+      <p class="problem-nav-position" aria-live="polite">
+        <span class="problem-nav-current">${current + 1}</span>
+        <span class="problem-nav-of">of</span>
+        <span class="problem-nav-total">${QUESTIONS_PER_TOPIC}</span>
+      </p>
+      ${action}
     </nav>`;
 }
 
@@ -279,10 +264,6 @@ function problemKey() {
 function currentProblem() {
   const key = problemKey();
   return state.problemCache[key] || (state.problemCache[key] = loadProblem(state.topic, state.questionIndex));
-}
-
-function problemStatus(index) {
-  return state.problemCache[`${state.topic}:${index}`]?.result;
 }
 
 function saveQuestionState() {
@@ -655,13 +636,6 @@ function renderPractice(options = {}) {
                 })
                 .join("")}
             </div>
-            <div class="question-actions">
-              ${
-                state.checked
-                  ? `<button type="button" id="next" class="primary">Next question →</button>`
-                  : `<button type="button" id="check" class="primary" ${!state.selected ? "disabled" : ""}>Check answer</button>`
-              }
-            </div>
           </section>
           ${state.showSolution ? renderSolution(p, correct) : ""}
         </div>
@@ -707,9 +681,6 @@ function bindPracticeEvents(preserveVisual = false) {
     button.addEventListener("click", () => {
       goToQuestion(state.questionIndex + (button.dataset.questionNav === "next" ? 1 : -1));
     });
-  });
-  document.querySelectorAll("[data-question]").forEach(button => {
-    button.addEventListener("click", () => goToQuestion(Number(button.dataset.question)));
   });
   const choiceButtons = [...document.querySelectorAll("[data-choice]")];
   choiceButtons.forEach((button, index) => {
