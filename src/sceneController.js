@@ -172,7 +172,7 @@ export function createSceneController(options = {}) {
     iframe.className = "legacy-animation";
     iframe.setAttribute(
       "aria-label",
-      `${title}. Interactive 3D diagram. Use the camera controls below, or focus the diagram and use arrow keys, plus/minus, and R.`
+      `${title}. Interactive 3D diagram. Drag to orbit, scroll or pinch to zoom. Focus this diagram for arrow keys, plus/minus zoom, and R to reset view. Use the Play, Scrub, Strips, and Speed controls under the diagram to control animation.`
     );
     hostEl.querySelector(".legacy-animation")?.remove();
     hostEl.append(iframe);
@@ -188,17 +188,38 @@ export function createSceneController(options = {}) {
       dispose,
       reset: () => post({ action: "resetView" }),
       post,
+      setExample: spec => {
+        lastMountSpec = spec;
+        if (!spec) return false;
+        post({ action: "setExample", spec });
+        return true;
+      },
       get frame() {
         return frame;
       }
     };
   }
 
+  /**
+   * Hot-swap VisualSpec without remounting the iframe (preferred Dual method path).
+   * Falls back to no-op if not mounted; caller should mount() when frame is missing.
+   */
+  function setExample(visualSpec) {
+    lastMountSpec = visualSpec;
+    if (!frame?.contentWindow || !visualSpec) return false;
+    post({ action: "setExample", spec: visualSpec });
+    return true;
+  }
+
   return {
     mount,
     post,
     dispose,
+    setExample,
     reset: () => post({ action: "resetView" }),
+    get ready() {
+      return sceneReady;
+    },
     /** @deprecated use SCENE_MESSAGE_TYPE */
     messageType: SCENE_MESSAGE_TYPE
   };

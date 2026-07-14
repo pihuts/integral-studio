@@ -3,10 +3,12 @@
 
 Visual contract (architecture):
   Each problem's `visualParams` (or eventual full visualSpec) is the *authoritative*
-  serializable curve/method description. Runtime JS materializes via
-  `materializeVisualExample` and only runs regex repair as a compatibility layer.
-  Prefer emitting complete curve types from SUPPORTED_CURVE_TYPES in visualSpecs.js
-  so runtime repair can shrink over time.
+  serializable curve/method description. Runtime JS materializes ONLY via
+  `materializeVisualExample` (Materialization seam). Audits must use the same path.
+
+  Schema: src/visualSpecSchema.js — SUPPORTED_CURVE_TYPES / SUPPORTED_RENDER_METHODS.
+  Prefer emitting complete visualParams so runtime regex repair (provenance: "repair")
+  trends toward zero. Incomplete params still work via repair, but count as debt.
 """
 
 from __future__ import annotations
@@ -7737,17 +7739,30 @@ def emit_js(bank):
             parts.append(emit_problem(p, indent="    "))
         parts.append("  ],")
     parts.append("};")
-    parts.append(f"\nexport const QUESTIONS_PER_TOPIC = {PER_TOPIC};")
+    # QUESTIONS_PER_TOPIC lives in bankMeta.js — re-export so generatedBank stays in sync.
+    parts.append('\nexport { QUESTIONS_PER_TOPIC } from "./bankMeta.js";')
     return "\n".join(parts)
 
 
 def main():
     bank = build_bank()
-    out = Path(__file__).resolve().parent.parent / "src" / "generatedBank.js"
+    src = Path(__file__).resolve().parent.parent / "src"
+    out = src / "generatedBank.js"
     out.write_text(emit_js(bank), encoding="utf-8")
+    # Co-locate curriculum size with the generator — single JS source of truth.
+    meta = src / "bankMeta.js"
+    meta.write_text(
+        "/**\n"
+        " * Bank metadata — single source of truth for curriculum sizing.\n"
+        " * Written by scripts/build-problem-bank.py (PER_TOPIC).\n"
+        " */\n\n"
+        f"export const QUESTIONS_PER_TOPIC = {PER_TOPIC};\n",
+        encoding="utf-8",
+    )
     for topic in TOPICS:
         print(f"{topic}: {len(bank[topic])} problems")
     print(f"Wrote {out}")
+    print(f"Wrote {meta}")
 
 
 if __name__ == "__main__":

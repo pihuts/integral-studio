@@ -50,3 +50,14 @@ export function sourceLink(source = "") {
   }
   return null;
 }
+
+/** Compact HTML footnote for a problem source (empty string when none). */
+export function sourceLinkHtml(source, escapeFn) {
+  if (!source) return "";
+  const href = sourceLink(source);
+  if (!href) {
+    return `<p class="problem-source">${escapeFn(source)}</p>`;
+  }
+  const label = `${source} (opens in new tab)`;
+  return `<p class="problem-source"><a href="${escapeFn(href)}" target="_blank" rel="noopener noreferrer" aria-label="${escapeFn(label)}">${escapeFn(source)}<span class="sr-only"> (opens in new tab)</span></a></p>`;
+}

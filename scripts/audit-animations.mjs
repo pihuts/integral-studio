@@ -8,6 +8,8 @@ import { VISUAL_BY_SOURCE, VISUAL_BY_KEY } from "../src/briggsVisualSpecs.js";
 import { buildExampleFromSpec, compileCurve, SUPPORTED_CURVE_TYPES, SUPPORTED_RENDER_METHODS } from "../src/visualSpecs.js";
 import { materializeVisualExample } from "../src/materializeVisual.js";
 import { loadBriggsBank } from "../src/briggsProblems.js";
+import { isShellMethod, isDiskOrWasher } from "../src/methodRenderers.js";
+import { resolveOrientation } from "../src/visualSpecs.js";
 
 await loadBriggsBank();
 
@@ -47,34 +49,7 @@ const METHOD_ORIENTATION = {
 
 /** Methods original-shell.js handles with dedicated render paths. */
 const EXPLICIT_RENDER_METHODS = new Set(SUPPORTED_RENDER_METHODS);
-
-function isShellMethod(method) {
-  return typeof method === "string" && method.startsWith("shell");
-}
-
-function isWasherDiskMethod(method) {
-  return ["disk-x", "disk-y", "washer-x", "washer-y"].includes(method);
-}
-
-function resolveOrientation(method, specOrientation) {
-  if (method === "shell-x" || method === "disk-y" || method === "washer-y") return "horizontal";
-  if (method === "surface-y" && specOrientation === "horizontal") return "horizontal";
-  if (method === "arc") return specOrientation === "horizontal" ? "horizontal" : "vertical";
-  if (
-    method === "shell-y" ||
-    method === "disk-x" ||
-    method === "washer-x" ||
-    method === "surface-x" ||
-    method === "cross-square" ||
-    method === "cross-semicircle"
-  ) {
-    return "vertical";
-  }
-  if (["area", "centroid", "inertia"].includes(method)) {
-    return specOrientation === "horizontal" ? "horizontal" : "vertical";
-  }
-  return specOrientation === "horizontal" ? "horizontal" : "vertical";
-}
+const isWasherDiskMethod = isDiskOrWasher;
 
 function sampleCurveRange(fn, min, max, steps = 48) {
   let lo = Infinity;
@@ -435,7 +410,7 @@ function collectSpecsFromProblem(problem, topic, difficulty, index) {
   const baseId = `${topic}/${difficulty}#${index}`;
   const label = problem.source || problem.visualKey || problem.title;
 
-  const { baseSpec, validation } = materializeVisualExample(problem);
+  const { spec: baseSpec, validation } = materializeVisualExample(problem);
   if (!baseSpec) {
     entries.push({
       id: baseId,

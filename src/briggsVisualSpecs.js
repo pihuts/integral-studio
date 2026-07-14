@@ -1,6 +1,7 @@
 /** Animation specs keyed by Briggs problem source tag. */
 
 import { compileCurve } from "./visualSpecs.js";
+import { SPEC_PROVENANCE } from "./visualSpecSchema.js";
 
 export const VISUAL_BY_SOURCE = {
   "Briggs §4.9, Ex. 1a": {
@@ -1500,18 +1501,37 @@ function repairGeneratedVisualSpec(problem) {
  * this stays the internal adapter for maps + generator compatibility repair.
  *
  * Repair is intentionally a shrinking layer: when the bank generator emits complete
- * visualParams, these regex patches should no-op.
+ * visualParams, these regex patches should no-op. Track provenance so audits can
+ * measure repair rate and drive generator completeness.
+ *
+ * @returns {object} problem with visualSpec and _specProvenance set
  */
 export function attachVisualSpec(problem) {
+  let provenance = SPEC_PROVENANCE.NONE;
   if (problem.visualKey && VISUAL_BY_KEY[problem.visualKey]) {
     problem.visualSpec = structuredClone(VISUAL_BY_KEY[problem.visualKey]);
+    provenance = SPEC_PROVENANCE.MAP_KEY;
   } else if (problem.source && VISUAL_BY_SOURCE[problem.source]) {
     problem.visualSpec = structuredClone(VISUAL_BY_SOURCE[problem.source]);
+    provenance = SPEC_PROVENANCE.MAP_SOURCE;
   } else if (problem.visualParams) {
     problem.visualSpec = inferVisualSpec(problem);
+    provenance = SPEC_PROVENANCE.VISUAL_PARAMS;
   }
+
   // Compatibility only — generator-owned specs should not need this.
+  // Snapshot method+domain so we only tag REPAIR when something load-bearing changes.
+  const before = problem.visualSpec
+    ? `${problem.visualSpec.method}|${problem.visualSpec.xMin}|${problem.visualSpec.xMax}|${JSON.stringify(problem.visualSpec.top)}`
+    : "";
   repairGeneratedVisualSpec(problem);
+  const after = problem.visualSpec
+    ? `${problem.visualSpec.method}|${problem.visualSpec.xMin}|${problem.visualSpec.xMax}|${JSON.stringify(problem.visualSpec.top)}`
+    : "";
+  if (before && after && before !== after && provenance === SPEC_PROVENANCE.VISUAL_PARAMS) {
+    provenance = SPEC_PROVENANCE.REPAIR;
+  }
+
   if (problem.visualSpec) {
     if (problem.dualMethod !== false) {
       problem.dualMethod = Boolean(
@@ -1519,5 +1539,6 @@ export function attachVisualSpec(problem) {
       );
     }
   }
+  problem._specProvenance = provenance;
   return problem;
 }

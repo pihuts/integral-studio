@@ -4,10 +4,10 @@
  * Exit 1 if any error-severity issues.
  */
 
-import { getBriggsProblem, briggsProblemCount } from "../src/briggsProblems.js";
+import { getBriggsProblem, briggsProblemCount, loadBriggsBank } from "../src/briggsProblems.js";
 import { VISUAL_BY_SOURCE, VISUAL_BY_KEY } from "../src/briggsVisualSpecs.js";
-import { buildExampleFromSpec, compileCurve, resolveVisualSpec, SUPPORTED_RENDER_METHODS } from "../src/visualSpecs.js";
-import { loadBriggsBank } from "../src/briggsProblems.js";
+import { buildExampleFromSpec, compileCurve, SUPPORTED_RENDER_METHODS } from "../src/visualSpecs.js";
+import { materializeVisualExample } from "../src/materializeVisual.js";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -462,22 +462,32 @@ function main() {
       if (!problem) continue;
       problem._topic = topic;
       const issues = [];
-      const spec = resolveVisualSpec(problem, { alternate: false });
+      // Single Materialization seam — attach / repair / validate (same as Practice).
+      const mat = materializeVisualExample(problem, { alternate: false });
+      const spec = mat.spec;
       const built = auditSpecTechnical(spec, issues);
       if (spec) {
         methodHist.set(spec.method || "area", (methodHist.get(spec.method || "area") || 0) + 1);
-        auditSemantic(problem, spec, issues);
+        auditSemantic(mat.problem || problem, spec, issues);
         if (built) {
           auditGeometrySanity(spec, built, issues);
-          auditPromptCurveMatch(problem, spec, built, issues);
+          auditPromptCurveMatch(mat.problem || problem, spec, built, issues);
+        }
+        if (mat.provenance === "repair") {
+          issues.push({
+            severity: "info",
+            code: "repair-provenance",
+            message: "VisualSpec required runtime repair (generator visualParams incomplete)"
+          });
         }
       } else {
-        issues.push({ severity: "error", code: "no-spec", message: "resolveVisualSpec returned null" });
+        issues.push({ severity: "error", code: "no-spec", message: "materializeVisualExample returned null spec" });
       }
 
-      // alternate
-      if (problem.visualSpec?.alternateSpec || problem.dualMethod) {
-        const alt = resolveVisualSpec(problem, { alternate: true });
+      // alternate via same Materialization seam
+      if (mat.dualMethod || mat.problem?.visualSpec?.alternateSpec) {
+        const altMat = materializeVisualExample(mat.problem || problem, { alternate: true });
+        const alt = altMat.spec;
         if (alt && alt !== spec) {
           const altIssues = [];
           const altBuilt = auditSpecTechnical(alt, altIssues);

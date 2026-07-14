@@ -9,6 +9,7 @@
     "preview": "vite preview --host 127.0.0.1 --port 4173",
     "deploy": "npm run build && wrangler deploy",
     "generate-bank": "python scripts/build-problem-bank.py",
+    "test": "node --test tests/**/*.test.js",
     "audit-animations": "node scripts/audit-animations.mjs",
     "audit-animations:deep": "node scripts/audit-animations-deep.mjs",
     "audit-animations:all": "node scripts/audit-animations.mjs && node scripts/audit-animations-deep.mjs",

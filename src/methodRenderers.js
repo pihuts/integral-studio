@@ -1,6 +1,6 @@
 /**
- * Method-renderer registry — pure classification + phase policy for the 3D kernel.
- * Geometry adapters live in original-shell.js; this module owns the deep policy surface.
+ * Method-renderer policy — deep surface for Animation timeline × Render method.
+ * Geometry adapters live in original-shell.js; they must obey framePolicy / stackPieceKind.
  */
 
 import { PHASE, phasesFromProgress, stepIdFromProgress } from "./animationTimeline.js";
@@ -41,6 +41,23 @@ export function methodFamily(method) {
   return "disk-washer";
 }
 
+/**
+ * Which stack-geometry adapter rebuildCompletedShells / rotate samples should use.
+ * Kernel must switch on this — not ad-hoc string startsWith.
+ */
+export function stackPieceKind(method) {
+  const family = methodFamily(method);
+  if (family === "pump-bowl") return "pump-bowl";
+  if (family === "pool-fill") return "pool-fill";
+  if (family === "arc") return "arc";
+  if (family === "area-strip") return "slice";
+  if (family === "cross") return "cross";
+  if (family === "shell") return "shell";
+  if (family === "surface") return method === "surface-y" ? "surface-y" : "surface-x";
+  if (family === "goat-barn") return "goat-barn";
+  return "disk-washer";
+}
+
 /** Piece name for legend / narration (not step track). */
 export function pieceLabel(method) {
   if (isShellMethod(method)) return "shell";
@@ -65,18 +82,13 @@ export function rendererPolicy(method) {
     showSampleBelow: PHASE.sampleHide,
     showRotateFrom: PHASE.midShellStart,
     showRotateUntil: PHASE.midShellEnd,
-    earlyReturn: family === "goat-barn" || family === "pool-fill"
+    earlyReturn: family === "goat-barn" || family === "pool-fill",
+    goatStage(progress) {
+      if (progress < 0.43) return 1;
+      if (progress < 0.72) return 2;
+      return 3;
+    }
   };
-  if (family === "goat-barn") {
-    return {
-      ...base,
-      goatStage(progress) {
-        if (progress < 0.43) return 1;
-        if (progress < 0.72) return 2;
-        return 3;
-      }
-    };
-  }
   return base;
 }
 
@@ -86,14 +98,17 @@ export function rendererPolicy(method) {
 export function framePolicy(method, progress) {
   const phases = phasesFromProgress(progress);
   const policy = rendererPolicy(method);
+  const p = phases.progress;
   return {
     ...policy,
     ...phases,
-    stepId: stepIdFromProgress(progress),
-    showSlice: progress < policy.showSampleBelow && method !== "arc",
-    showRotateSample: progress >= policy.showRotateFrom && progress < policy.showRotateUntil,
+    stepId: stepIdFromProgress(p),
+    pieceKind: stackPieceKind(method),
+    goatStage: policy.goatStage(p),
+    showSlice: p < policy.showSampleBelow && method !== "arc",
+    showRotateSample: p >= policy.showRotateFrom && p < policy.showRotateUntil,
     shellAngle: 0.02 + phases.rotatePhase * Math.PI * 2,
-    regionOpacity: progress > PHASE.regionFade ? 0.2 : 0.55
+    regionOpacity: p > PHASE.regionFade ? 0.2 : 0.55
   };
 }
 

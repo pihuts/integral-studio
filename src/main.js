@@ -1,24 +1,37 @@
 /**
- * Practice app shell — wires problem module, view, and SceneController.
- * Domain logic lives in problemService / materializeVisual / animationTimeline.
+ * Practice app shell — view adapter over Practice session + Scene host.
+ * Domain: Bank · PreparedProblem · Scene · animationTimeline.
  */
 import "./style.css";
 import {
   TOPICS,
   QUESTIONS_PER_TOPIC,
   loadBriggsBank,
-  loadProblem,
-  visualLabel as problemVisualLabel
+  loadProblemRow
 } from "./problemService.js";
-import {
-  materializeVisualExample,
-  materializeVisualSpec,
-  problemHasDualMethod
-} from "./materializeVisual.js";
 import { STEP_PROGRESS, animationStepsForMethod } from "./animationTimeline.js";
-import { createSceneController } from "./sceneController.js";
+import {
+  state,
+  prefersReducedMotion,
+  isCompactViewport,
+  scrollBehavior,
+  maxStrips,
+  cameraControlHint,
+  vizStageInstructions,
+  loadProgress
+} from "./practiceState.js";
+import { preparedHasDualMethod } from "./preparedProblem.js";
+import { createPracticeSession } from "./practiceSession.js";
+import { setKatex, escape, tex, richMath, formatSolutionBody, mathDescription } from "./mathRender.js";
+import { equationsForProblem } from "./equations.js";
+import { sourceLinkHtml } from "./references.js";
+import {
+  initSceneHost,
+  mountScene,
+  applyDualMethodVisual,
+  getSceneHandle
+} from "./sceneHost.js";
 
-let katex;
 let practiceDependenciesPromise;
 
 function loadPracticeDependencies() {
@@ -26,7 +39,7 @@ function loadPracticeDependencies() {
     practiceDependenciesPromise = Promise.all([
       loadBriggsBank(),
       import("katex").then(module => {
-        katex = module.default;
+        setKatex(module.default);
       }),
       import("katex/dist/katex.min.css")
     ]);
@@ -34,74 +47,12 @@ function loadPracticeDependencies() {
   return practiceDependenciesPromise;
 }
 
-const state = {
-  screen: "landing",
-  topic: "fundamentals",
-  questionIndex: 0,
-  correct: 0,
-  attempts: 0,
-  selected: null,
-  checked: false,
-  showSolution: false,
-  method: "shells",
-  slices: 16,
-  playbackSpeed: 3,
-  playbackProgress: 0,
-  playing: true,
-  alternate: false,
-  problem: null,
-  problemCache: {},
-  animationStep: "region",
-  animationStepText: "Sketch the bounded region.",
-  vizLoading: true,
-  vizError: null,
-  practiceLoading: false,
-  practiceError: null
-};
-
 const SCENE_ORIGIN = window.location.origin;
-const prefersReducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-const isCoarsePointer = () => window.matchMedia("(pointer: coarse)").matches;
-const isNarrowViewport = () => window.matchMedia("(max-width: 600px)").matches;
-const isCompactViewport = () => window.matchMedia("(max-width: 860px)").matches;
-const scrollBehavior = () => (prefersReducedMotion() ? "auto" : "smooth");
-state.playing = !prefersReducedMotion();
 
-function maxStrips() {
-  return isCoarsePointer() || isNarrowViewport() ? 24 : 48;
-}
-
-function cameraControlHint() {
-  if (isCoarsePointer()) {
-    return "Drag to orbit · pinch to zoom · two-finger pan · focus diagram for arrows/±/R";
-  }
-  return "Drag to orbit · scroll to zoom · right-drag to pan · arrows orbit · ± zoom · R reset";
-}
-
-function vizPaletteFromCss() {
-  const cs = getComputedStyle(document.documentElement);
-  const get = name => cs.getPropertyValue(name).trim();
-  return {
-    canvas: (get("--media-canvas") || "#ede6d8").replace("#", ""),
-    region: get("--viz-region") || "#c4887a",
-    shell: get("--viz-shell") || "#bc9a62",
-    solid: get("--viz-solid") || "#a04a3f",
-    water: get("--viz-water") || "#3f8a5f",
-    ink: get("--viz-ink") || "#7b2d26",
-    line: get("--line") || "#d7ccbb",
-    muted: get("--muted") || "#6b6158",
-    panel: get("--panel") || "#fbf7f0",
-    red: get("--red") || "#a23b3b",
-    teal: get("--teal") || "#3f8a5f",
-    accent: get("--accent") || "#bc9a62"
-  };
-}
+const session = createPracticeSession({ loadProblemRow });
 
 function animationStepsFor(problem) {
-  const method =
-    materializeVisualSpec(problem, { alternate: state.alternate })?.method ||
-    problem?.visual ||
-    "area";
+  const method = session.animationMethod() || problem?.visual || "area";
   return animationStepsForMethod(method, problem?.visual);
 }
 
@@ -135,9 +86,10 @@ function renderProblemNavigator() {
 function renderStepTrack(activeStep, problem) {
   const steps = animationStepsFor(problem);
   return `<ol class="step-track" aria-label="Animation steps">
-    ${steps.map(step => {
-      const active = step.id === activeStep;
-      return `<li class="step-item-wrap">
+    ${steps
+      .map(step => {
+        const active = step.id === activeStep;
+        return `<li class="step-item-wrap">
         <button type="button"
           class="step-item${active ? " active" : ""}"
           data-step="${step.id}"
@@ -147,7 +99,8 @@ function renderStepTrack(activeStep, problem) {
           ${escape(step.label)}
         </button>
       </li>`;
-    }).join("")}
+      })
+      .join("")}
   </ol>`;
 }
 
@@ -166,7 +119,8 @@ function bindStepJumpControls() {
       }
       if (progressOut) progressOut.textContent = `${Math.round(progress * 100)}%`;
       syncPlayButton();
-      sceneHandle?.post({ action: "setProgress", value: progress });
+      getSceneHandle()?.post({ action: "setProgress", value: progress });
+      getSceneHandle()?.post({ action: "pause" });
       updateAnimationStep(step);
     });
   });
@@ -176,11 +130,16 @@ function syncSliderAria(input, text) {
   if (input) input.setAttribute("aria-valuetext", text);
 }
 
+const ICON_PLAY = `<svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M8 5.14v13.72c0 .8.87 1.3 1.56.88l10.1-6.86a1 1 0 0 0 0-1.68L9.56 4.26A1 1 0 0 0 8 5.14z"/></svg>`;
+const ICON_PAUSE = `<svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M7 5h3.5a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zm6.5 0H17a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1h-3.5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/></svg>`;
+const ICON_RESET = `<svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 5a7 7 0 1 1-6.32 4H8a1 1 0 1 1 0 2H4.5A1.5 1.5 0 0 1 3 9.5v-3a1 1 0 1 1 2 0v.86A9 9 0 1 0 12 3a1 1 0 1 1 0 2z"/></svg>`;
+
 function syncPlayButton(playBtn = document.querySelector("#play-toggle")) {
   if (!playBtn) return;
-  playBtn.textContent = state.playing ? "Pause" : "Play";
+  playBtn.innerHTML = state.playing ? ICON_PAUSE : ICON_PLAY;
   playBtn.setAttribute("aria-pressed", String(state.playing));
   playBtn.setAttribute("aria-label", state.playing ? "Pause animation" : "Play animation");
+  playBtn.setAttribute("title", state.playing ? "Pause" : "Play");
 }
 
 function applyDualMethodUi(problem) {
@@ -196,96 +155,9 @@ function applyDualMethodUi(problem) {
   }
 }
 
-const escape = value =>
-  String(value).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" }[c]));
-const normalizeLatex = value => String(value).replace(/\\\\/g, "\\");
-const tex = (value, display = false) =>
-  katex.renderToString(normalizeLatex(value), {
-    displayMode: display,
-    throwOnError: false,
-    strict: "ignore",
-    trust: false,
-    maxSize: 20,
-    maxExpand: 500
-  });
-
-const richMath = value => {
-  const text = String(value ?? "");
-  const parts = [];
-  const re = /\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\$([^$\n]+?)\$/g;
-  let last = 0;
-  let match;
-  while ((match = re.exec(text))) {
-    if (match.index > last) parts.push(escape(text.slice(last, match.index)));
-    const display = match[1] != null || match[2] != null;
-    const body = match[1] ?? match[2] ?? match[3] ?? match[4] ?? "";
-    parts.push(tex(body, display));
-    last = match.index + match[0].length;
-  }
-  if (last < text.length) parts.push(escape(text.slice(last)));
-  return parts.join("") || escape(text);
-};
-
-const mathDescription = value =>
-  normalizeLatex(value)
-    .replace(/\\frac\{([^}]*)\}\{([^}]*)\}/g, "($1)/($2)")
-    .replace(/\\sqrt\{([^}]*)\}/g, "sqrt($1)")
-    .replace(/\\[a-zA-Z]+/g, " ")
-    .replace(/[{}]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-
-function saveProgress() {
-  localStorage.setItem(
-    "integral-studio-progress",
-    JSON.stringify({
-      topic: state.topic,
-      correct: state.correct,
-      attempts: state.attempts
-    })
-  );
-}
-
-function loadProgress() {
-  try {
-    const saved = JSON.parse(localStorage.getItem("integral-studio-progress") || "{}");
-    if (saved.topic && TOPICS[saved.topic]) state.topic = saved.topic;
-    if (typeof saved.correct === "number") state.correct = saved.correct;
-    if (typeof saved.attempts === "number") state.attempts = saved.attempts;
-  } catch {
-    /* optional */
-  }
-}
-
-function problemKey() {
-  return `${state.topic}:${state.questionIndex}`;
-}
-
-function currentProblem() {
-  const key = problemKey();
-  return state.problemCache[key] || (state.problemCache[key] = loadProblem(state.topic, state.questionIndex));
-}
-
-function saveQuestionState() {
-  if (state.problem) {
-    state.problem.ui = {
-      selected: state.selected,
-      checked: state.checked,
-      showSolution: state.showSolution
-    };
-  }
-}
-
-function restoreQuestionState(problem) {
-  Object.assign(state, problem.ui || { selected: null, checked: false, showSolution: false });
-}
-
 function goToQuestion(index) {
-  saveQuestionState();
-  state.questionIndex = Math.max(0, Math.min(QUESTIONS_PER_TOPIC - 1, index));
-  state.problem = currentProblem();
-  restoreQuestionState(state.problem);
-  render({ focusChoice: state.problem.choices?.[0]?.id });
+  const prepared = session.goToQuestion(index);
+  render({ focusChoice: prepared.problem?.choices?.[0]?.id });
 }
 
 async function startPractice() {
@@ -293,124 +165,26 @@ async function startPractice() {
   state.practiceError = null;
   renderLanding();
   try {
-    await loadPracticeDependencies();
+    const prepared = await session.start(loadPracticeDependencies);
+    render({ focusChoice: prepared.problem?.choices?.[0]?.id });
   } catch {
     practiceDependenciesPromise = null;
-    state.practiceLoading = false;
-    state.practiceError = "Practice could not load. Check your connection and try again.";
     renderLanding();
-    return;
   }
-  state.practiceLoading = false;
-  state.screen = "practice";
-  state.questionIndex = 0;
-  state.problemCache = {};
-  state.problem = currentProblem();
-  Object.assign(state, { selected: null, checked: false, showSolution: false });
-  saveProgress();
-  render({ focusChoice: state.problem.choices?.[0]?.id });
 }
 
 function goLanding() {
-  saveQuestionState();
-  state.screen = "landing";
+  session.goHome();
   render();
 }
 
 function visualLabel(problem) {
-  return problemVisualLabel(problem, { alternate: state.alternate });
+  const prepared = state.prepared || problem?._prepared || session.currentPrepared();
+  return prepared.visualLabel(state.alternate);
 }
 
-function solutionMethodLabel(problem, alternate) {
-  const spec = materializeVisualSpec(problem, { alternate });
-  const vertical = spec?.orientation === "vertical";
-  const shells = spec?.method?.startsWith("shell");
-  const slice = vertical ? "Vertical strips" : "Horizontal strips";
-  const sweep = shells ? "shells" : "disks or washers";
-  return `${slice} → ${sweep}`;
-}
-
-function equationsForProblem(problem) {
-  if (Array.isArray(problem?.equations) && problem.equations.length) {
-    return problem.equations;
-  }
-  const method =
-    materializeVisualSpec(problem, { alternate: state.alternate })?.method ||
-    problem?.visualParams?.method ||
-    problem?.visual ||
-    state.topic ||
-    "";
-  const m = String(method).toLowerCase();
-  const topic = state.topic;
-  if (topic === "fundamentals" || m.includes("fund")) {
-    return [
-      "\\int x^{n}\\,dx=\\frac{x^{n+1}}{n+1}+C\\quad(n\\neq-1)",
-      "\\int\\big(f+g\\big)\\,dx=\\int f\\,dx+\\int g\\,dx",
-      "\\int c\\,f(x)\\,dx=c\\int f(x)\\,dx"
-    ];
-  }
-  if (m.startsWith("shell")) {
-    return [
-      "V=2\\pi\\int_a^b(\\text{radius})(\\text{height})\\,dx",
-      "dV=2\\pi\\,r\\,h\\,dx"
-    ];
-  }
-  if (m.startsWith("washer")) {
-    return [
-      "V=\\pi\\int_a^b\\Big(R_{\\text{outer}}^{2}-R_{\\text{inner}}^{2}\\Big)\\,dx",
-      "dV=\\pi\\big(R_{\\text{out}}^{2}-R_{\\text{in}}^{2}\\big)\\,dx"
-    ];
-  }
-  if (m.startsWith("disk")) {
-    return [
-      "V=\\pi\\int_a^b\\big[R(x)\\big]^{2}\\,dx",
-      "dV=\\pi R^{2}\\,dx"
-    ];
-  }
-  if (m.startsWith("surface") || topic === "surface") {
-    return [
-      "S=2\\pi\\int_a^b y\\sqrt{1+[y']^{2}}\\,dx\\quad(\\text{about }x\\text{-axis})",
-      "dS=2\\pi\\,(\\text{radius})\\,ds"
-    ];
-  }
-  if (m === "arc" || topic === "arc" || problem?.visual === "curve") {
-    return [
-      "L=\\int_a^b\\sqrt{1+[f'(x)]^{2}}\\,dx",
-      "ds=\\sqrt{1+[y']^{2}}\\,dx"
-    ];
-  }
-  if (topic === "centroids" || problem?.visual === "centroid") {
-    return [
-      "A=\\int_a^b f(x)\\,dx",
-      "\\bar{x}=\\frac{1}{A}\\int_a^b x f(x)\\,dx",
-      "\\bar{y}=\\frac{1}{A}\\int_a^b\\frac{1}{2}[f(x)]^{2}\\,dx"
-    ];
-  }
-  if (topic === "inertia" || problem?.visual === "inertia") {
-    return [
-      "I_x=\\int_a^b\\frac{[f(x)]^{3}}{3}\\,dx\\quad(\\text{vertical strip})",
-      "I_y=\\int_a^b x^{2} f(x)\\,dx\\quad(\\text{about }y\\text{-axis})"
-    ];
-  }
-  if (topic === "applications") {
-    return [
-      "W=\\int_a^b F(x)\\,dx",
-      "F_{\\text{spring}}=kx,\\quad W=\\tfrac12 k x^{2}"
-    ];
-  }
-  if (topic === "area" || m === "area" || problem?.visual === "area") {
-    return [
-      "A=\\int_a^b\\big[f_{\\text{top}}(x)-f_{\\text{bottom}}(x)\\big]\\,dx",
-      "\\int_a^b f(x)\\,dx=F(b)-F(a)"
-    ];
-  }
-  if (topic === "volumes") {
-    return [
-      "V=\\pi\\int R^{2}\\,dx\\quad(\\text{disk/washer})",
-      "V=2\\pi\\int r h\\,dx\\quad(\\text{shell})"
-    ];
-  }
-  return ["\\text{total}=\\int(\\text{slice amount})"];
+function solutionMethodLabel(_problem, alternate) {
+  return session.solutionMethodLabel(alternate);
 }
 
 function renderEquationsBox(equations) {
@@ -440,20 +214,84 @@ function renderSolutionSteps(steps, startIndex = 1) {
         <div class="solution-step-marker" aria-hidden="true">${startIndex + index}</div>
         <div class="solution-step-body">
           <h3 class="solution-step-title">${richMath(title)}</h3>
-          <div class="solution-step-text">${richMath(body)}</div>
+          <div class="solution-step-text">${formatSolutionBody(body)}</div>
         </div>
       </li>`;
     })
     .join("");
 }
 
+function renderModelControls(problem) {
+  const dual = preparedHasDualMethod(state.prepared || problem?._prepared);
+  const stripMax = maxStrips();
+  const strips = Math.min(state.slices, stripMax);
+  const progressPct = Math.round(state.playbackProgress * 100);
+  const expanded = Boolean(state.modelControlsExpanded);
+  const dualHtml = dual
+    ? `
+    <div class="segmented control-method-row" role="group" aria-label="Slice direction">
+      <button type="button" class="${!state.alternate ? "selected" : ""}" data-method="shells" aria-pressed="${!state.alternate}" aria-label="Vertical strips">Vertical<span class="label-rest"> strips</span></button>
+      <button type="button" class="${state.alternate ? "selected" : ""}" data-method="washers" aria-pressed="${state.alternate}" aria-label="Horizontal strips">Horizontal<span class="label-rest"> strips</span></button>
+    </div>`
+    : "";
+
+  return `
+    <div class="model-controls${expanded ? " is-expanded" : " is-collapsed"}">
+      ${dualHtml}
+      <div class="control-progress-row">
+        <label class="control-field control-field-progress" for="playback-progress">
+          <span class="control-label">Scrub</span>
+          <input id="playback-progress" type="range" min="0" max="1" step="0.001" value="${state.playbackProgress}" aria-valuetext="${progressPct} percent" />
+          <output id="progress-out" for="playback-progress">${progressPct}%</output>
+        </label>
+        <div class="control-transport" role="group" aria-label="Animation playback">
+          <button type="button" id="play-toggle" class="primary control-btn control-btn-icon" aria-pressed="${state.playing}" aria-label="${state.playing ? "Pause animation" : "Play animation"}" title="${state.playing ? "Pause" : "Play"}">${state.playing ? ICON_PAUSE : ICON_PLAY}</button>
+          <button type="button" id="reset-playback" class="secondary control-btn control-btn-icon" aria-label="Reset animation" title="Reset">${ICON_RESET}</button>
+        </div>
+        <button
+          type="button"
+          id="toggle-model-controls"
+          class="control-expand-btn"
+          aria-expanded="${expanded}"
+          aria-controls="model-control-details"
+          title="${expanded ? "Hide strips and speed" : "Show strips, speed, and camera reset"}"
+        >
+          <span class="control-expand-label">${expanded ? "Less" : "More"}</span>
+          <span class="control-expand-chevron" aria-hidden="true"></span>
+        </button>
+      </div>
+      <div class="control-details" id="model-control-details"${expanded ? "" : " hidden"}>
+        <div class="control-grid">
+          <label class="control-field" for="slices">
+            <span class="control-label">Strips</span>
+            <input id="slices" type="range" min="4" max="${stripMax}" step="1" value="${strips}" aria-valuetext="${strips} strips" />
+            <output id="slices-out" for="slices">${strips}</output>
+          </label>
+          <label class="control-field" for="playback-speed">
+            <span class="control-label">Speed</span>
+            <input id="playback-speed" type="range" min="0.25" max="3" step="0.05" value="${state.playbackSpeed}" aria-valuetext="${state.playbackSpeed.toFixed(2)} times speed" />
+            <output id="speed-out" for="playback-speed">${state.playbackSpeed.toFixed(2)}×</output>
+          </label>
+          <div class="control-actions">
+            <button type="button" id="reset-view" class="text-button">Reset view</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
 function renderSolution(p, correct) {
-  const dual = problemHasDualMethod(p);
+  const dual = preparedHasDualMethod(state.prepared || p?._prepared);
   const primarySteps = state.alternate && p.alternateSteps?.length ? p.alternateSteps : p.steps;
   const secondarySteps = state.alternate ? p.steps : p.alternateSteps;
   const secondaryLabel = solutionMethodLabel(p, !state.alternate);
-  const equationsHtml = renderEquationsBox(equationsForProblem(p));
+  const method = session.animationMethod();
+  const equationsHtml = renderEquationsBox(
+    equationsForProblem(p, { alternate: state.alternate, topic: state.topic, method })
+  );
   const stepsHtml = renderSolutionSteps(primarySteps);
+  const resultLabel = correct ? "Correct" : "Not quite";
+  const titleText = correct ? "Correct — worked solution" : "Not quite — worked solution";
   const alternateHtml =
     dual && secondarySteps?.length
       ? `
@@ -467,7 +305,8 @@ function renderSolution(p, correct) {
   return `
     <section class="solution-panel is-open" id="solution-panel" aria-labelledby="solution-title" tabindex="-1">
       <div class="solution-banner ${correct ? "is-correct" : "is-incorrect"}">
-        <h2 id="solution-title">Worked solution</h2>
+        <p class="solution-result" role="status">${resultLabel}</p>
+        <h2 id="solution-title">${titleText}</h2>
       </div>
       ${equationsHtml}
       <ol class="solution-steps">${stepsHtml}</ol>
@@ -554,8 +393,8 @@ function renderLanding() {
 function renderPractice(options = {}) {
   const { preserveVisual = false } = options;
   const existingVisual = preserveVisual ? document.querySelector(".visual-panel") : null;
-  const topic = TOPICS[state.topic];
-  const p = state.problem || (state.problem = currentProblem());
+  if (!state.prepared || !state.problem) session.ensurePrepared();
+  const p = state.problem;
   const correct = state.checked && state.selected === p.correctId;
 
   document.querySelector("#app").innerHTML = `
@@ -564,10 +403,6 @@ function renderPractice(options = {}) {
         <span class="brand-mark" aria-hidden="true">∫</span>
         <span>CEE 103</span>
       </button>
-      <div class="topbar-meta">
-        <span class="topbar-topic">${topic.label}</span>
-        <span class="topbar-progress">${state.questionIndex + 1}/${QUESTIONS_PER_TOPIC}</span>
-      </div>
     </header>
     <div class="app-shell">
       <main class="workspace">
@@ -576,11 +411,29 @@ function renderPractice(options = {}) {
             <div class="visual-head compact">
               <div class="visual-head-row">
                 ${renderStepTrack(state.animationStep, p)}
-                <button type="button" id="camera-hint" class="visual-camera-hint" title="${escape(cameraControlHint())}" aria-label="${escape(cameraControlHint())}">?</button>
+                <button
+                  type="button"
+                  id="camera-hint"
+                  class="visual-camera-hint${state.cameraHelpOpen ? " is-open" : ""}"
+                  title="${escape(cameraControlHint())}"
+                  aria-label="${state.cameraHelpOpen ? "Hide camera controls help" : "Show camera controls help"}"
+                  aria-expanded="${state.cameraHelpOpen}"
+                  aria-controls="camera-help-panel"
+                >?</button>
               </div>
               <p id="step-detail" class="step-detail" aria-live="polite">${escape(state.animationStepText)}</p>
+              <div
+                id="camera-help-panel"
+                class="camera-help-panel"
+                role="region"
+                aria-label="Camera controls"
+                ${state.cameraHelpOpen ? "" : "hidden"}
+              >
+                <p class="camera-help-text">${escape(cameraControlHint())}</p>
+              </div>
             </div>
-            <div id="three-host" class="viz-host${state.vizLoading ? " is-loading" : ""}${state.vizError ? " has-error" : ""}" role="region" aria-label="Concept visualization" aria-busy="${state.vizLoading}" aria-describedby="camera-hint">
+            <p id="viz-instructions" class="sr-only">${escape(vizStageInstructions())}</p>
+            <div id="three-host" class="viz-host${state.vizLoading ? " is-loading" : ""}${state.vizError ? " has-error" : ""}" role="region" aria-label="Concept visualization" aria-busy="${state.vizLoading}" aria-describedby="viz-instructions">
               <div class="viz-loading" id="viz-loading" role="status" aria-live="polite" aria-hidden="${state.vizLoading && !state.vizError ? "false" : "true"}">
                 <span class="viz-loading-bar" aria-hidden="true"></span>
                 <span class="viz-loading-text">Loading visualization…</span>
@@ -590,18 +443,7 @@ function renderPractice(options = {}) {
                 <button type="button" id="viz-retry" class="secondary control-btn">Try again</button>
               </div>
             </div>
-            ${
-              problemHasDualMethod(p)
-                ? `
-            <div class="model-controls">
-                <div class="segmented" role="group" aria-label="Slice direction">
-                  <button type="button" class="${!state.alternate ? "selected" : ""}" data-method="shells" aria-pressed="${!state.alternate}" aria-label="Vertical strips">Vertical<span class="label-rest"> strips</span></button>
-                  <button type="button" class="${state.alternate ? "selected" : ""}" data-method="washers" aria-pressed="${state.alternate}" aria-label="Horizontal strips">Horizontal<span class="label-rest"> strips</span></button>
-                </div>
-            </div>
-              `
-                : ""
-            }
+            ${renderModelControls(p)}
           </section>
           <section class="problem-panel" aria-labelledby="question-title">
             <div class="question-top">
@@ -609,6 +451,7 @@ function renderPractice(options = {}) {
               <span class="question-index">Q${state.questionIndex + 1}</span>
             </div>
             <h1 id="question-title">${richMath(p.prompt)}</h1>
+            ${sourceLinkHtml(p.source, escape)}
             <div class="choices" role="radiogroup" aria-labelledby="question-title">
               ${p.choices
                 .map((option, index) => {
@@ -657,8 +500,6 @@ function renderPractice(options = {}) {
     requestAnimationFrame(() => {
       const visual = document.querySelector(".visual-panel");
       const panel = document.querySelector("#solution-panel");
-      // Compact: prefer viz so flow is problem → viz → sol while scrolling.
-      // Desktop: keep solution under the problem column in view.
       const target = isCompactViewport() ? visual : panel;
       if (target) {
         target.scrollIntoView({
@@ -686,7 +527,7 @@ function bindPracticeEvents(preserveVisual = false) {
   choiceButtons.forEach((button, index) => {
     button.addEventListener("click", () => {
       const id = button.dataset.choice;
-      state.selected = id;
+      session.selectChoice(id);
       renderPractice({ preserveVisual: true, focusChoice: id });
     });
     button.addEventListener("keydown", event => {
@@ -695,14 +536,14 @@ function bindPracticeEvents(preserveVisual = false) {
       if (event.key === "Home" || event.key === "End") {
         const next = choiceButtons[event.key === "Home" ? 0 : choiceButtons.length - 1];
         const nextId = next.dataset.choice;
-        state.selected = nextId;
+        session.selectChoice(nextId);
         renderPractice({ preserveVisual: true, focusChoice: nextId });
         return;
       }
       const direction = event.key === "ArrowDown" || event.key === "ArrowRight" ? 1 : -1;
       const nextIndex = (index + direction + choiceButtons.length) % choiceButtons.length;
       const nextId = choiceButtons[nextIndex].dataset.choice;
-      state.selected = nextId;
+      session.selectChoice(nextId);
       renderPractice({ preserveVisual: true, focusChoice: nextId });
     });
   });
@@ -710,71 +551,79 @@ function bindPracticeEvents(preserveVisual = false) {
     document.querySelectorAll("[data-method]").forEach(button => {
       button.addEventListener("click", () => {
         const nextAlternate = button.dataset.method === "washers";
-        if (nextAlternate === state.alternate) return;
-        state.alternate = nextAlternate;
-        state.method = button.dataset.method;
+        session.setAlternate(nextAlternate);
         const problem = state.problem;
         applyDualMethodUi(problem);
-        const visualSpec = materializeVisualSpec(problem, { alternate: state.alternate });
-        if (visualSpec && document.querySelector(".legacy-animation")) {
-          state.vizLoading = true;
-          state.vizError = null;
-          const host = document.querySelector("#three-host");
-          const errorEl = document.querySelector("#viz-error");
-          host?.classList.add("is-loading");
-          host?.classList.remove("has-error");
-          host?.setAttribute("aria-busy", "true");
-          if (errorEl) {
-            errorEl.hidden = true;
-            errorEl.setAttribute("aria-hidden", "true");
-          }
-          sceneHandle?.post({ action: "setExample", spec: visualSpec });
-          syncSceneControls();
-        } else {
-          mountScene(problem);
-          bindStepJumpControls();
-        }
+        applyDualMethodVisual(problem);
+        if (!document.querySelector(".legacy-animation")) bindStepJumpControls();
       });
     });
     document.querySelector("#slices")?.addEventListener("input", event => {
-      state.slices = Number(event.target.value);
+      session.setSlices(event.target.value);
       const output = document.querySelector("#slices-out");
       if (output) output.textContent = state.slices;
       syncSliderAria(event.target, `${state.slices} strips`);
-      sceneHandle?.post({ action: "setShells", value: state.slices });
+      getSceneHandle()?.post({ action: "setShells", value: state.slices });
     });
     document.querySelector("#playback-speed")?.addEventListener("input", event => {
-      state.playbackSpeed = Number(event.target.value);
+      session.setSpeed(event.target.value);
       const output = document.querySelector("#speed-out");
       if (output) output.textContent = `${state.playbackSpeed.toFixed(2)}×`;
       syncSliderAria(event.target, `${state.playbackSpeed.toFixed(2)} times speed`);
-      sceneHandle?.post({ action: "setSpeed", value: state.playbackSpeed });
+      getSceneHandle()?.post({ action: "setSpeed", value: state.playbackSpeed });
     });
     document.querySelector("#playback-progress")?.addEventListener("input", event => {
-      state.playbackProgress = Number(event.target.value);
-      state.playing = false;
+      session.setProgress(event.target.value);
       const output = document.querySelector("#progress-out");
       if (output) output.textContent = `${Math.round(state.playbackProgress * 100)}%`;
       syncSliderAria(event.target, `${Math.round(state.playbackProgress * 100)} percent`);
       syncPlayButton();
-      sceneHandle?.post({ action: "setProgress", value: state.playbackProgress });
+      getSceneHandle()?.post({ action: "setProgress", value: state.playbackProgress });
     });
     document.querySelector("#play-toggle")?.addEventListener("click", () => {
-      state.playing = !state.playing;
+      session.togglePlay();
       syncPlayButton();
-      sceneHandle?.post({ action: state.playing ? "play" : "pause" });
+      getSceneHandle()?.post({ action: state.playing ? "play" : "pause" });
     });
     document.querySelector("#reset-playback")?.addEventListener("click", () => {
-      state.playbackProgress = 0;
-      state.playing = false;
+      session.resetPlayback();
       const progressInput = document.querySelector("#playback-progress");
       const progressOut = document.querySelector("#progress-out");
       if (progressInput) progressInput.value = "0";
       if (progressOut) progressOut.textContent = "0%";
       syncPlayButton();
-      sceneHandle?.post({ action: "resetPlayback" });
+      getSceneHandle()?.post({ action: "resetPlayback" });
     });
-    document.querySelector("#reset-view")?.addEventListener("click", () => sceneHandle?.reset());
+    document.querySelector("#reset-view")?.addEventListener("click", () => getSceneHandle()?.reset());
+    document.querySelector("#toggle-model-controls")?.addEventListener("click", event => {
+      state.modelControlsExpanded = !state.modelControlsExpanded;
+      const expanded = state.modelControlsExpanded;
+      const root = event.currentTarget.closest(".model-controls");
+      const details = document.querySelector("#model-control-details");
+      const label = event.currentTarget.querySelector(".control-expand-label");
+      if (root) {
+        root.classList.toggle("is-expanded", expanded);
+        root.classList.toggle("is-collapsed", !expanded);
+      }
+      if (details) details.hidden = !expanded;
+      event.currentTarget.setAttribute("aria-expanded", String(expanded));
+      event.currentTarget.title = expanded
+        ? "Hide strips and speed"
+        : "Show strips, speed, and camera reset";
+      if (label) label.textContent = expanded ? "Less" : "More";
+    });
+    document.querySelector("#camera-hint")?.addEventListener("click", event => {
+      state.cameraHelpOpen = !state.cameraHelpOpen;
+      const open = state.cameraHelpOpen;
+      const panel = document.querySelector("#camera-help-panel");
+      if (panel) panel.hidden = !open;
+      event.currentTarget.classList.toggle("is-open", open);
+      event.currentTarget.setAttribute("aria-expanded", String(open));
+      event.currentTarget.setAttribute(
+        "aria-label",
+        open ? "Hide camera controls help" : "Show camera controls help"
+      );
+    });
     document.querySelector("#viz-retry")?.addEventListener("click", () => {
       if (state.problem) {
         state.vizError = null;
@@ -784,83 +633,13 @@ function bindPracticeEvents(preserveVisual = false) {
     });
   }
   document.querySelector("#check")?.addEventListener("click", () => {
-    const isCorrect = state.selected === state.problem.correctId;
-    state.checked = true;
-    state.showSolution = true;
-    state.problem.result = isCorrect;
-    state.attempts += 1;
-    if (isCorrect) state.correct += 1;
-    saveQuestionState();
-    saveProgress();
+    session.check();
     renderPractice({ preserveVisual: true });
   });
   document.querySelector("#next")?.addEventListener("click", () => {
-    goToQuestion((state.questionIndex + 1) % QUESTIONS_PER_TOPIC);
+    session.next();
+    render({ focusChoice: state.problem?.choices?.[0]?.id });
   });
-}
-
-/** Active iframe controller handle from createSceneController().mount */
-let sceneHandle = null;
-
-const sceneController = createSceneController({
-  origin: SCENE_ORIGIN,
-  getPalette: vizPaletteFromCss,
-  onReady: () => hideVizLoading(),
-  onError: message => showVizError(message),
-  onStep: (step, text) => updateAnimationStep(step, text),
-  onProgress: (nextProgress, nextPlaying) => {
-    const playing = prefersReducedMotion() ? false : nextPlaying;
-    const progressInput = document.querySelector("#playback-progress");
-    const progressOut = document.querySelector("#progress-out");
-    if (Math.abs(nextProgress - state.playbackProgress) >= 0.001 || playing !== state.playing) {
-      state.playbackProgress = nextProgress;
-      state.playing = playing;
-      if (progressInput && document.activeElement !== progressInput) {
-        progressInput.value = String(state.playbackProgress);
-        syncSliderAria(progressInput, `${Math.round(state.playbackProgress * 100)} percent`);
-      }
-      if (progressOut) progressOut.textContent = `${Math.round(state.playbackProgress * 100)}%`;
-      syncPlayButton();
-    }
-  },
-  onSyncControls: () => syncSceneControls()
-});
-
-function hideVizLoading() {
-  state.vizLoading = false;
-  state.vizError = null;
-  const host = document.querySelector("#three-host");
-  const loader = document.querySelector("#viz-loading");
-  const errorEl = document.querySelector("#viz-error");
-  if (host) {
-    host.classList.remove("is-loading", "has-error");
-    host.setAttribute("aria-busy", "false");
-  }
-  if (loader) loader.setAttribute("aria-hidden", "true");
-  if (errorEl) {
-    errorEl.hidden = true;
-    errorEl.setAttribute("aria-hidden", "true");
-  }
-}
-
-function showVizError(message) {
-  state.vizLoading = false;
-  state.vizError = message || "Couldn't load the visualization.";
-  const host = document.querySelector("#three-host");
-  const loader = document.querySelector("#viz-loading");
-  const errorEl = document.querySelector("#viz-error");
-  const errorText = errorEl?.querySelector(".viz-error-text");
-  if (host) {
-    host.classList.remove("is-loading");
-    host.classList.add("has-error");
-    host.setAttribute("aria-busy", "false");
-  }
-  if (loader) loader.setAttribute("aria-hidden", "true");
-  if (errorEl) {
-    errorEl.hidden = false;
-    errorEl.setAttribute("aria-hidden", "false");
-    if (errorText) errorText.textContent = state.vizError;
-  }
 }
 
 function updateAnimationStep(step, text) {
@@ -885,87 +664,26 @@ function updateAnimationStep(step, text) {
   if (detail) detail.textContent = state.animationStepText;
 }
 
-function syncSceneControls() {
-  if (prefersReducedMotion()) state.playing = false;
-  sceneHandle?.post({ action: "setPalette", palette: vizPaletteFromCss() });
-  sceneHandle?.post({ action: "setShells", value: state.slices });
-  sceneHandle?.post({ action: "setSpeed", value: state.playbackSpeed });
-  sceneHandle?.post({ action: "setProgress", value: state.playbackProgress });
-  if (state.playing) sceneHandle?.post({ action: "play" });
-  else sceneHandle?.post({ action: "pause" });
-  syncPlayButton();
-}
-
-function mountScene(problem) {
-  sceneHandle?.dispose();
-  sceneHandle = null;
-  const host = document.querySelector("#three-host");
-  if (!host) return;
-  state.animationStep = "region";
-  state.animationStepText = "Sketch the bounded region.";
-  state.vizLoading = true;
-  state.vizError = null;
-  state.slices = Math.min(state.slices, maxStrips());
-  host.classList.add("is-loading");
-  host.classList.remove("has-error");
-  host.setAttribute("aria-busy", "true");
-  host.querySelector(".legacy-animation")?.remove();
-  let loader = host.querySelector("#viz-loading");
-  if (!loader) {
-    loader = document.createElement("div");
-    loader.id = "viz-loading";
-    loader.className = "viz-loading";
-    loader.setAttribute("role", "status");
-    loader.setAttribute("aria-live", "polite");
-    loader.innerHTML =
-      '<span class="viz-loading-bar" aria-hidden="true"></span><span class="viz-loading-text">Loading visualization…</span>';
-    host.prepend(loader);
-  }
-  loader.setAttribute("aria-hidden", "false");
-  let errorEl = host.querySelector("#viz-error");
-  if (!errorEl) {
-    errorEl = document.createElement("div");
-    errorEl.id = "viz-error";
-    errorEl.className = "viz-error";
-    errorEl.setAttribute("role", "alert");
-    errorEl.innerHTML =
-      '<p class="viz-error-text">Couldn\'t load the visualization.</p><button type="button" id="viz-retry" class="secondary control-btn">Try again</button>';
-    host.append(errorEl);
-    errorEl.querySelector("#viz-retry")?.addEventListener("click", () => {
-      if (state.problem) mountScene(state.problem);
-    });
-  }
-  errorEl.hidden = true;
-  errorEl.setAttribute("aria-hidden", "true");
-
-  const legacyModes = {
-    area: "area",
-    volume: "volume",
-    centroid: "centroid",
-    curve: "arc",
-    surface: "surface",
-    inertia: "inertia"
-  };
-  const { spec: visualSpec } = materializeVisualExample(problem, { alternate: state.alternate });
-  const { a = 1, b = 1, n = 1 } = problem.given || {};
-  const palette = vizPaletteFromCss();
-  const canvasColor = palette.canvas || "ede6d8";
-  const vizLabel = visualLabel(problem);
-
-  sceneHandle = sceneController.mount(host, {
-    visualSpec,
-    mode: legacyModes[problem.visual] || "area",
-    a,
-    b,
-    n,
-    alternate: state.alternate,
-    shells: state.slices,
-    speed: state.playbackSpeed,
-    title: vizLabel,
-    canvasColor,
-    palette
-  });
-}
+initSceneHost({
+  origin: SCENE_ORIGIN,
+  onStep: (step, text) => updateAnimationStep(step, text),
+  onProgress: (nextProgress, nextPlaying) => {
+    const playing = prefersReducedMotion() ? false : nextPlaying;
+    const progressInput = document.querySelector("#playback-progress");
+    const progressOut = document.querySelector("#progress-out");
+    if (Math.abs(nextProgress - state.playbackProgress) >= 0.001 || playing !== state.playing) {
+      state.playbackProgress = nextProgress;
+      state.playing = playing;
+      if (progressInput && document.activeElement !== progressInput) {
+        progressInput.value = String(state.playbackProgress);
+        syncSliderAria(progressInput, `${Math.round(state.playbackProgress * 100)} percent`);
+      }
+      if (progressOut) progressOut.textContent = `${Math.round(state.playbackProgress * 100)}%`;
+      syncPlayButton();
+    }
+  },
+  syncPlayButton
+});
 
 function render(options) {
   if (state.screen === "landing") renderLanding();
@@ -976,8 +694,8 @@ window.matchMedia("(prefers-reduced-motion: reduce)").addEventListener("change",
   if (!event.matches) return;
   state.playing = false;
   syncPlayButton();
-  sceneHandle?.post({ action: "pause" });
+  getSceneHandle()?.post({ action: "pause" });
 });
 
-loadProgress();
+loadProgress(TOPICS);
 render();

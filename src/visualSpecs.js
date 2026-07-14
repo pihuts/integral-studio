@@ -1,22 +1,16 @@
 /**
  * Serializable curve specs for the Three.js animation.
  * Each curve is { t: type, ...params } and compiled to a function at runtime.
+ *
+ * Schema (methods / curve types) lives in visualSpecSchema.js.
+ * Problem → VisualSpec attach/repair is owned by materializeVisual.js — do not
+ * call resolveVisualSpecFromAttached on raw bank rows from audits or Practice.
  */
 
-export const SUPPORTED_CURVE_TYPES = Object.freeze([
-  "c", "lin", "pow", "pow-shift", "sqrt", "poly", "rat", "samples", "piecewise",
-  "exp", "quad", "sin", "cos", "cosh", "sinh", "cos2", "sqrt-shift", "sub-u-power",
-  "inv-sqrt-minus-recip", "sec2", "csc2", "sec-tan", "lin-cos", "lin-sin", "trig-combo",
-  "exp-plus-recip", "exp-lin-recip", "sub-u-gen", "sub-u-linear", "pow-sqrt", "log", "recip",
-  "recip-quad", "inv-sqrt-unit", "inv-sqrt", "neg-log", "sqrt-inv", "sqrt-inv-cap",
-  "inv-quad-hi", "inv-quad-lo", "circle-half-y", "circle-upper"
-]);
-
-export const SUPPORTED_RENDER_METHODS = Object.freeze([
-  "area", "centroid", "inertia", "arc", "surface-x", "surface-y", "pump-bowl", "pool-fill",
-  "goat-barn", "cross-square", "cross-semicircle", "shell-x", "shell-y", "disk-x", "disk-y",
-  "washer-x", "washer-y"
-]);
+export {
+  SUPPORTED_CURVE_TYPES,
+  SUPPORTED_RENDER_METHODS
+} from "./visualSpecSchema.js";
 
 export function compileCurve(spec) {
   if (!spec) return () => 0;
@@ -205,8 +199,14 @@ function compileBound(spec) {
   return compileCurve(spec);
 }
 
-function resolveOrientation(method, specOrientation) {
+/**
+ * Canonical orientation for a render method + optional spec orientation.
+ * Shared by Materialization, Scene buildExample, and audit scripts.
+ */
+export function resolveOrientation(method, specOrientation) {
   if (method === "shell-x" || method === "disk-y" || method === "washer-y") return "horizontal";
+  if (method === "pump-bowl") return "horizontal";
+  if (method === "pool-fill") return "vertical";
   if (method === "surface-y" && specOrientation === "horizontal") return "horizontal";
   if (method === "arc") return specOrientation === "horizontal" ? "horizontal" : "vertical";
   if (
@@ -218,6 +218,9 @@ function resolveOrientation(method, specOrientation) {
     method === "cross-semicircle"
   ) {
     return "vertical";
+  }
+  if (method === "area" || method === "centroid" || method === "inertia") {
+    return specOrientation === "horizontal" ? "horizontal" : "vertical";
   }
   return specOrientation === "horizontal" ? "horizontal" : "vertical";
 }
@@ -393,7 +396,11 @@ export function buildLegacySpec(problem, { alternate = false } = {}) {
   };
 }
 
-export function resolveVisualSpec(problem, { alternate = false } = {}) {
+/**
+ * Resolve primary/alternate from an *already attached* visualSpec (or legacy given).
+ * Internal to Materialization and iframe demo bootstrap — not the public bank seam.
+ */
+export function resolveVisualSpecFromAttached(problem, { alternate = false } = {}) {
   const base = problem.visualSpec || buildLegacySpec(problem, { alternate });
   if (!base) return null;
   if (alternate && base.alternateSpec) {
@@ -404,6 +411,11 @@ export function resolveVisualSpec(problem, { alternate = false } = {}) {
   const spec = structuredClone(base);
   delete spec.alternateSpec;
   return spec;
+}
+
+/** @deprecated Use materializeVisual.resolveVisualSpec — attach may be skipped. */
+export function resolveVisualSpec(problem, { alternate = false } = {}) {
+  return resolveVisualSpecFromAttached(problem, { alternate });
 }
 
 export function problemHasDualMethod(problem) {

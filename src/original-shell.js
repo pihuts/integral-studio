@@ -1,15 +1,16 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { buildExampleFromSpec, compileCurve } from './visualSpecs.js';
+import { buildExampleFromSpec, buildLegacySpec, resolveVisualSpecFromAttached, compileCurve } from './visualSpecs.js';
 import { STEP_PROGRESS, phasesFromProgress, stepIdFromProgress } from './animationTimeline.js';
 import {
   framePolicy,
-  methodFamily,
+  stackPieceKind,
   isAreaStripMethod,
   pieceLabel,
   PHASE
 } from './methodRenderers.js';
 import { SCENE_MESSAGE_TYPE, isSceneMessage, childEnvelope } from './sceneProtocol.js';
+import { rebuildCompletedStack, buildRotateSample } from './sceneFamilyAdapters.js';
 
 
 
@@ -133,6 +134,8 @@ import { SCENE_MESSAGE_TYPE, isSceneMessage, childEnvelope } from './sceneProtoc
     const DEFAULT_SCALE_X = 0.45;
     const DEFAULT_SCALE_Y = 0.3;
     const TARGET_WORLD_SPAN = 4.4;
+    /** Shared diagram plane for region fill, curves, axes, and slice strips. */
+    const PLANE_Z = 0;
     let scaleX = DEFAULT_SCALE_X;
     let scaleY = DEFAULT_SCALE_Y;
     const xToWorld = x => x * scaleX;
@@ -734,6 +737,11 @@ import { SCENE_MESSAGE_TYPE, isSceneMessage, childEnvelope } from './sceneProtoc
       return Number.isFinite(n) ? n : null;
     };
 
+    // Diagram lines sit in the same plane as the region fill. Large world-z
+    // offsets (used previously to beat z-fighting) project as gaps/fringes under
+    // oblique cameras. Prefer depthTest:false + renderOrder for overlays.
+    const lineOverlay = { depthTest: false, depthWrite: false };
+
     const materials = {
       region: new THREE.MeshStandardMaterial({
         color: 0xc4887a,
@@ -742,6 +750,12 @@ import { SCENE_MESSAGE_TYPE, isSceneMessage, childEnvelope } from './sceneProtoc
         side: THREE.DoubleSide,
         roughness: 0.55,
         metalness: 0.03,
+        // Fill writes no depth and is pushed slightly back so coplanar strokes
+        // and solid cut-faces win without a world-space z gap.
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: 1,
+        polygonOffsetUnits: 1,
       }),
       shell: new THREE.MeshStandardMaterial({
         color: 0xbc9a62,
@@ -749,6 +763,11 @@ import { SCENE_MESSAGE_TYPE, isSceneMessage, childEnvelope } from './sceneProtoc
         side: THREE.DoubleSide,
         roughness: 0.48,
         metalness: 0.04,
+        // Pull solids slightly forward so the θ=0 cut face does not AA-fringe
+        // against the transparent region in the same plane.
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -1,
       }),
       completed: new THREE.MeshStandardMaterial({
         color: 0xa04a3f,
@@ -756,6 +775,9 @@ import { SCENE_MESSAGE_TYPE, isSceneMessage, childEnvelope } from './sceneProtoc
         side: THREE.DoubleSide,
         roughness: 0.58,
         metalness: 0.02,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -1,
       }),
       water: new THREE.MeshStandardMaterial({
         color: 0x3f8a5f,
@@ -804,12 +826,20 @@ import { SCENE_MESSAGE_TYPE, isSceneMessage, childEnvelope } from './sceneProtoc
       goatBody: new THREE.MeshStandardMaterial({ color: 0xfbf7f0, roughness: 0.5 }),
       goatHead: new THREE.MeshStandardMaterial({ color: 0x1e1a16, roughness: 0.45 }),
       point: new THREE.MeshStandardMaterial({ color: 0x7b2d26, roughness: 0.45 }),
-      lineBlue: new THREE.LineBasicMaterial({ color: 0x7b2d26 }),
-      lineGreen: new THREE.LineBasicMaterial({ color: 0x3f8a5f }),
-      lineAmber: new THREE.LineBasicMaterial({ color: 0xbc9a62 }),
-      lineRed: new THREE.LineBasicMaterial({ color: 0xa23b3b }),
-      lineDark: new THREE.LineBasicMaterial({ color: 0x6b6158 }),
-      grid: new THREE.LineBasicMaterial({ color: 0xd7ccbb, transparent: true, opacity: 0.55 }),
+      lineBlue: new THREE.LineBasicMaterial({ color: 0x7b2d26, ...lineOverlay }),
+      lineGreen: new THREE.LineBasicMaterial({ color: 0x3f8a5f, ...lineOverlay }),
+      lineAmber: new THREE.LineBasicMaterial({ color: 0xbc9a62, ...lineOverlay }),
+      lineRed: new THREE.LineBasicMaterial({ color: 0xa23b3b, ...lineOverlay }),
+      lineDark: new THREE.LineBasicMaterial({ color: 0x6b6158, ...lineOverlay }),
+      // Muted ink — not UI --line (near-white on the cool canvas).
+      // Single LineSegments object (see makeGrid) + no transparency sort keeps
+      // the paper stable while orbiting (multi-line transparent grids flicker).
+      grid: new THREE.LineBasicMaterial({
+        color: 0x6e7682,
+        transparent: false,
+        depthTest: true,
+        depthWrite: false,
+      }),
     };
     const sharedMaterials = new Set(Object.values(materials));
 
@@ -836,7 +866,11 @@ import { SCENE_MESSAGE_TYPE, isSceneMessage, childEnvelope } from './sceneProtoc
       setMat(materials.lineAmber, "shell", "#bc9a62");
       setMat(materials.lineRed, "red", "#a23b3b");
       setMat(materials.lineDark, "muted", "#6b6158");
-      setMat(materials.grid, "line", "#d7ccbb");
+      // Prefer an explicit grid token; never reuse UI border --line (too close to canvas).
+      setMat(materials.grid, "grid", "#6e7682");
+      if (palette.grid == null && palette.muted) {
+        setMat(materials.grid, "muted", "#6e7682");
+      }
       const canvas = parseCssColor(palette.canvas ? `#${String(palette.canvas).replace("#", "")}` : null);
       if (canvas != null) {
         renderer.setClearColor(canvas, 1);
@@ -890,13 +924,19 @@ import { SCENE_MESSAGE_TYPE, isSceneMessage, childEnvelope } from './sceneProtoc
       return new THREE.Line(geometry, material);
     }
 
+    function disposeMaterial(mat) {
+      if (!mat || sharedMaterials.has(mat)) return;
+      if (mat.map) mat.map.dispose();
+      mat.dispose();
+    }
+
     function clearGroup(group) {
       group.traverse(child => {
         if (child.geometry) child.geometry.dispose();
         const mat = child.material;
-        if (!mat || sharedMaterials.has(mat)) return;
-        if (Array.isArray(mat)) mat.forEach(m => { if (m && !sharedMaterials.has(m)) m.dispose(); });
-        else mat.dispose();
+        if (!mat) return;
+        if (Array.isArray(mat)) mat.forEach(disposeMaterial);
+        else disposeMaterial(mat);
       });
       group.clear();
     }
@@ -1092,25 +1132,31 @@ import { SCENE_MESSAGE_TYPE, isSceneMessage, childEnvelope } from './sceneProtoc
     }
 
     function makeGrid(ex) {
-      const grid = new THREE.Group();
-      const z = -0.015;
+      // One LineSegments draw for the whole paper. Separate transparent Line
+      // objects re-sort every frame while orbiting and "glitch" in/out.
       const { xMin, xMax, yMin, yMax } = getSceneBounds(ex);
       const divisions = 8;
+      // Push clearly behind the diagram plane; still small vs typical framing so
+      // it doesn't read as a detached sheet from the usual ¾ view.
+      const z = PLANE_Z - 0.012;
+      const positions = [];
+      const pushSeg = (x0, y0, x1, y1) => {
+        positions.push(x0, y0, z, x1, y1, z);
+      };
       for (let i = 0; i <= divisions; i += 1) {
-        const x = xMin + ((xMax - xMin) * i) / divisions;
-        grid.add(makeLine([
-          new THREE.Vector3(xToWorld(x), yToWorld(yMin), z),
-          new THREE.Vector3(xToWorld(x), yToWorld(yMax), z),
-        ], materials.grid));
+        const x = xToWorld(xMin + ((xMax - xMin) * i) / divisions);
+        pushSeg(x, yToWorld(yMin), x, yToWorld(yMax));
       }
       for (let i = 0; i <= divisions; i += 1) {
-        const y = yMin + ((yMax - yMin) * i) / divisions;
-        grid.add(makeLine([
-          new THREE.Vector3(xToWorld(xMin), yToWorld(y), z),
-          new THREE.Vector3(xToWorld(xMax), yToWorld(y), z),
-        ], materials.grid));
+        const y = yToWorld(yMin + ((yMax - yMin) * i) / divisions);
+        pushSeg(xToWorld(xMin), y, xToWorld(xMax), y);
       }
-      return grid;
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+      const lines = new THREE.LineSegments(geometry, materials.grid);
+      lines.renderOrder = -2;
+      lines.frustumCulled = true;
+      return lines;
     }
 
     function verticalBounds(ex, x) {
@@ -1160,92 +1206,222 @@ import { SCENE_MESSAGE_TYPE, isSceneMessage, childEnvelope } from './sceneProtoc
       return breaks;
     }
 
-    function makeRegion(ex) {
-      const shape = new THREE.Shape();
-      const steps = 72;
+    /**
+     * Shared boundary samples for region fill + curve strokes.
+     * One sampler + same upper/lower evaluation keeps shade and outlines coincident.
+     * All diagram geometry lives at PLANE_Z; overlay lines use depthTest:false so
+     * we never need a world-z gap (which reads as misalignment from side views).
+     */
+    const REGION_SAMPLE_STEPS = 160;
+
+    function sampleRegionBoundary(ex) {
+      const upper = [];
+      const lower = [];
       if (ex.orientation === "vertical") {
-        const x0 = ex.xMin;
-        const x1 = ex.xMax;
-        const xs = sampleAxis(x0, x1, steps, piecewiseBreaks(ex));
-        const start = verticalBounds(ex, xs[0]);
-        shape.moveTo(xToWorld(xs[0]), yToWorld(start.lower));
+        const xs = sampleAxis(ex.xMin, ex.xMax, REGION_SAMPLE_STEPS, piecewiseBreaks(ex));
         for (const x of xs) {
-          shape.lineTo(xToWorld(x), yToWorld(verticalBounds(ex, x).upper));
-        }
-        for (let i = xs.length - 1; i >= 0; i -= 1) {
-          const x = xs[i];
-          shape.lineTo(xToWorld(x), yToWorld(verticalBounds(ex, x).lower));
+          const b = verticalBounds(ex, x);
+          const wx = xToWorld(x);
+          upper.push(new THREE.Vector3(wx, yToWorld(b.upper), PLANE_Z));
+          lower.push(new THREE.Vector3(wx, yToWorld(b.lower), PLANE_Z));
         }
       } else {
-        const y0 = ex.yMin;
-        const y1 = ex.yMax;
-        const ys = sampleAxis(y0, y1, steps);
-        const start = horizontalBounds(ex, ys[0]);
-        shape.moveTo(xToWorld(start.left), yToWorld(ys[0]));
+        const ys = sampleAxis(ex.yMin, ex.yMax, REGION_SAMPLE_STEPS, piecewiseBreaks(ex));
         for (const y of ys) {
-          shape.lineTo(xToWorld(horizontalBounds(ex, y).right), yToWorld(y));
+          const b = horizontalBounds(ex, y);
+          const wy = yToWorld(y);
+          upper.push(new THREE.Vector3(xToWorld(b.right), wy, PLANE_Z));
+          lower.push(new THREE.Vector3(xToWorld(b.left), wy, PLANE_Z));
         }
-        for (let i = ys.length - 1; i >= 0; i -= 1) {
-          const y = ys[i];
-          shape.lineTo(xToWorld(horizontalBounds(ex, y).left), yToWorld(y));
-        }
+      }
+      return { upper, lower };
+    }
+
+    function makeRegion(ex) {
+      const { upper, lower } = sampleRegionBoundary(ex);
+      if (!upper.length) return new THREE.Group();
+      const shape = new THREE.Shape();
+      // Shape is 2D (x,y); z on the vectors is ignored here and applied on the mesh.
+      // Start at the first lower corner so both orientations close cleanly:
+      // vertical: (x0, bottom) → along top → back along bottom
+      // horizontal: (left, y0) → along right → back along left
+      shape.moveTo(lower[0].x, lower[0].y);
+      for (const p of upper) shape.lineTo(p.x, p.y);
+      for (let i = lower.length - 1; i >= 0; i -= 1) {
+        shape.lineTo(lower[i].x, lower[i].y);
       }
       const geometry = new THREE.ShapeGeometry(shape);
       const mesh = new THREE.Mesh(geometry, materials.region);
-      mesh.position.z = 0;
+      mesh.position.z = PLANE_Z;
+      mesh.renderOrder = 0;
       return mesh;
     }
 
     function makeCurve(ex) {
       const group = new THREE.Group();
-      const points = [];
-      const lower = [];
-      if (ex.orientation === "vertical") {
-        for (let i = 0; i <= 160; i += 1) {
-          const x = ex.xMin + (ex.xMax - ex.xMin) * i / 160;
-          points.push(new THREE.Vector3(xToWorld(x), yToWorld(ex.top(x)), 0.012));
-          lower.push(new THREE.Vector3(xToWorld(x), yToWorld(ex.bottom(x)), 0.014));
-        }
-      } else {
-        for (let i = 0; i <= 160; i += 1) {
-          const y = ex.yMin + (ex.yMax - ex.yMin) * i / 160;
-          points.push(new THREE.Vector3(xToWorld(ex.right(y)), yToWorld(y), 0.012));
-          lower.push(new THREE.Vector3(xToWorld(ex.left(y)), yToWorld(y), 0.014));
-        }
-      }
-      group.add(makeLine(points, materials.lineBlue));
-      group.add(makeLine(lower, materials.lineGreen));
+      const { upper, lower } = sampleRegionBoundary(ex);
+      const top = makeLine(upper, materials.lineBlue);
+      const bot = makeLine(lower, materials.lineGreen);
+      top.renderOrder = 2;
+      bot.renderOrder = 2;
+      group.add(top);
+      group.add(bot);
+      group.renderOrder = 2;
       return group;
+    }
+
+    /** Canvas sprite label that always faces the camera (axis tips, origin). */
+    function makeAxisLabel(text, color = "#3d3832", scale = 0.16) {
+      const size = 128;
+      const canvas = document.createElement("canvas");
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, size, size);
+      // Slightly lighter weight + tighter glyph so small sprites stay crisp.
+      ctx.font = "600 64px 'Segoe UI', system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      // Soft halo so the letter stays legible on light grid + shaded region.
+      ctx.lineWidth = 8;
+      ctx.strokeStyle = "rgba(248, 246, 242, 0.92)";
+      ctx.strokeText(text, size / 2, size / 2 + 2);
+      ctx.fillStyle = color;
+      ctx.fillText(text, size / 2, size / 2 + 2);
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.needsUpdate = true;
+      const material = new THREE.SpriteMaterial({
+        map: texture,
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+      });
+      const sprite = new THREE.Sprite(material);
+      sprite.scale.set(scale, scale, 1);
+      sprite.renderOrder = 10;
+      sprite.userData.isAxisLabel = true;
+      return sprite;
+    }
+
+    /** Short chevron at the positive end of an axis (math-diagram style). */
+    function makeAxisArrow(from, to, material) {
+      const dir = new THREE.Vector3().subVectors(to, from);
+      const len = dir.length();
+      if (len < 1e-6) return null;
+      dir.multiplyScalar(1 / len);
+      // Build a small perpendicular in the plane most visible for 2D axes (prefer XY).
+      let side = new THREE.Vector3(0, 0, 1).cross(dir);
+      if (side.lengthSq() < 1e-8) side = new THREE.Vector3(0, 1, 0).cross(dir);
+      side.normalize().multiplyScalar(Math.min(0.07, len * 0.08));
+      const back = dir.clone().multiplyScalar(-Math.min(0.12, len * 0.14));
+      const tip = to.clone();
+      const left = tip.clone().add(back).add(side);
+      const right = tip.clone().add(back).sub(side);
+      return makeLine([left, tip, right], material);
     }
 
     function makeAxes(ex) {
       const axes = new THREE.Group();
       const { xMin, xMax, yMin, yMax } = getSceneBounds(ex);
       const showCoords = ex.axisLabel !== "none";
+      // Same plane as region/curves so axes don't drift under oblique cameras.
+      const zAxis = PLANE_Z;
       if (showCoords) {
-        axes.add(makeLine([
-          new THREE.Vector3(xToWorld(xMin), 0, 0.016),
-          new THREE.Vector3(xToWorld(xMax), 0, 0.016),
-        ], materials.lineDark));
-        axes.add(makeLine([
-          new THREE.Vector3(0, yToWorld(yMin), 0.016),
-          new THREE.Vector3(0, yToWorld(yMax), 0.016),
-        ], materials.lineRed));
+        const x0 = xToWorld(xMin);
+        const x1 = xToWorld(xMax);
+        const y0 = yToWorld(yMin);
+        const y1 = yToWorld(yMax);
+        const originX = xToWorld(0);
+        const originY = yToWorld(0);
+
+        const xStart = new THREE.Vector3(x0, originY, zAxis);
+        const xEnd = new THREE.Vector3(x1, originY, zAxis);
+        const yStart = new THREE.Vector3(originX, y0, zAxis);
+        const yEnd = new THREE.Vector3(originX, y1, zAxis);
+
+        const xAxisLine = makeLine([xStart, xEnd], materials.lineDark);
+        const yAxisLine = makeLine([yStart, yEnd], materials.lineRed);
+        xAxisLine.renderOrder = 3;
+        yAxisLine.renderOrder = 3;
+        axes.add(xAxisLine);
+        axes.add(yAxisLine);
+
+        const xArrow = makeAxisArrow(xStart, xEnd, materials.lineDark);
+        const yArrow = makeAxisArrow(yStart, yEnd, materials.lineRed);
+        if (xArrow) {
+          xArrow.renderOrder = 3;
+          axes.add(xArrow);
+        }
+        if (yArrow) {
+          yArrow.renderOrder = 3;
+          axes.add(yArrow);
+        }
+
+        // Anchor labels to the problem domain (not padded revolution bounds), so
+        // x/y stay near the shaded region instead of drifting off-camera.
+        let domainXMax = Number.isFinite(ex.xMax) ? ex.xMax : xMax * 0.55;
+        let domainYMax = Number.isFinite(ex.yMax) ? ex.yMax : yMax * 0.55;
+        if (ex.orientation === "vertical" && typeof ex.top === "function" && Number.isFinite(ex.xMin) && Number.isFinite(ex.xMax)) {
+          let peak = -Infinity;
+          for (let i = 0; i <= 24; i += 1) {
+            const x = ex.xMin + ((ex.xMax - ex.xMin) * i) / 24;
+            const y = ex.top(x);
+            if (Number.isFinite(y)) peak = Math.max(peak, y);
+          }
+          if (Number.isFinite(peak)) domainYMax = Math.max(domainYMax, peak);
+        }
+        if (ex.orientation === "horizontal" && typeof ex.right === "function" && Number.isFinite(ex.yMin) && Number.isFinite(ex.yMax)) {
+          let peak = -Infinity;
+          for (let i = 0; i <= 24; i += 1) {
+            const y = ex.yMin + ((ex.yMax - ex.yMin) * i) / 24;
+            const x = ex.right(y);
+            if (Number.isFinite(x)) peak = Math.max(peak, x);
+          }
+          if (Number.isFinite(peak)) domainXMax = Math.max(domainXMax, peak);
+        }
+        domainXMax = Math.max(domainXMax, 0.6);
+        domainYMax = Math.max(domainYMax, 0.6);
+
+        // Sit labels just past the positive domain so they stay in the camera
+        // frame (padded revolution bounds often push tips off-screen).
+        const xLabelWorld = xToWorld(domainXMax * 1.04);
+        const yLabelWorld = yToWorld(domainYMax * 0.96);
+        const nudgeX = Math.max(0.14, xToWorld(domainXMax) * 0.06);
+        const nudgeY = Math.max(0.14, yToWorld(domainYMax) * 0.05);
+
+        const xLabel = makeAxisLabel("x", "#5c564e", 0.17);
+        xLabel.position.set(xLabelWorld, originY - nudgeY * 0.65, zAxis);
+        axes.add(xLabel);
+        const yLabel = makeAxisLabel("y", "#a23b3b", 0.17);
+        yLabel.position.set(originX + nudgeX * 0.65, yLabelWorld, zAxis);
+        axes.add(yLabel);
+
+        // Origin marker when 0 is inside the framed domain.
+        if (xMin <= 0 && xMax >= 0 && yMin <= 0 && yMax >= 0) {
+          const oLabel = makeAxisLabel("O", "#6b6158", 0.13);
+          oLabel.position.set(originX - nudgeX * 0.7, originY - nudgeY * 0.7, zAxis);
+          axes.add(oLabel);
+        }
       }
       if (ex.axisX !== undefined && ex.axisX !== 0) {
-        axes.add(makeLine([
-          new THREE.Vector3(xToWorld(ex.axisX), yToWorld(yMin), 0.03),
-          new THREE.Vector3(xToWorld(ex.axisX), yToWorld(yMax), 0.03),
-        ], materials.lineRed));
+        const rev = makeLine([
+          new THREE.Vector3(xToWorld(ex.axisX), yToWorld(yMin), zAxis),
+          new THREE.Vector3(xToWorld(ex.axisX), yToWorld(yMax), zAxis),
+        ], materials.lineRed);
+        rev.renderOrder = 3;
+        axes.add(rev);
       }
       if (ex.axisY !== undefined && ex.axisY !== 0) {
-        axes.add(makeLine([
-          new THREE.Vector3(xToWorld(xMin), yToWorld(ex.axisY), 0.03),
-          new THREE.Vector3(xToWorld(xMax), yToWorld(ex.axisY), 0.03),
-        ], materials.lineRed));
+        const rev = makeLine([
+          new THREE.Vector3(xToWorld(xMin), yToWorld(ex.axisY), zAxis),
+          new THREE.Vector3(xToWorld(xMax), yToWorld(ex.axisY), zAxis),
+        ], materials.lineRed);
+        rev.renderOrder = 3;
+        axes.add(rev);
       }
       if (ex.method?.startsWith("shell") || ex.method?.startsWith("disk") || ex.method?.startsWith("washer")) {
         const depth = Math.max(xToWorld(xMax) - xToWorld(xMin), 1.2) * 0.55;
+        // 3D depth cue along ±z through the origin (not coplanar with the diagram).
         axes.add(makeLine([
           new THREE.Vector3(0, 0, -depth),
           new THREE.Vector3(0, 0, depth),
@@ -1281,16 +1457,28 @@ import { SCENE_MESSAGE_TYPE, isSceneMessage, childEnvelope } from './sceneProtoc
       return mesh;
     }
 
+    /**
+     * Solid of revolution sector (disk / washer / shell wall).
+     * Vertices are duplicated per face family so outer-wall normals stay radial
+     * (shared rim verts with end-caps used to create dark crease rings).
+     */
     function makeTube(axis, center, length, innerRadius, outerRadius, angle, material, thickness = 0, axisOffset = 0) {
-      const segments = Math.max(3, Math.ceil(72 * angle / (Math.PI * 2)));
+      const segments = Math.max(16, Math.ceil(96 * Math.max(angle, 0.05) / (Math.PI * 2)));
       const half = (axis === "x" ? xToWorld(length) : yToWorld(length)) / 2;
-      const inner = axis === "x" ? yToWorld(Math.max(0, innerRadius)) : xToWorld(Math.max(0, innerRadius));
-      const outer = axis === "x" ? yToWorld(Math.max(0.006, outerRadius)) : xToWorld(Math.max(0.006, outerRadius));
+      const inner = axis === "x"
+        ? yToWorld(Math.max(0, innerRadius))
+        : xToWorld(Math.max(0, innerRadius));
+      const outerRaw = axis === "x"
+        ? yToWorld(Math.max(0, outerRadius))
+        : xToWorld(Math.max(0, outerRadius));
+      const outer = Math.max(outerRaw, inner + 1e-4);
+      const hasInner = inner > 1e-6;
       const positions = [];
+      const normals = [];
       const indices = [];
-      const row = segments + 1;
 
       function point(axial, radius, theta) {
+        // θ=0 lies in the diagram plane (z=0): cut face shares the shaded region.
         if (axis === "x") {
           return [
             xToWorld(center) + axial,
@@ -1305,46 +1493,113 @@ import { SCENE_MESSAGE_TYPE, isSceneMessage, childEnvelope } from './sceneProtoc
         ];
       }
 
-      for (let layer = 0; layer < 4; layer += 1) {
-        const r = layer < 2 ? inner : outer;
-        const axial = layer % 2 === 0 ? -half : half;
+      function radialNormal(theta) {
+        if (axis === "x") {
+          return [0, Math.cos(theta), Math.sin(theta)];
+        }
+        return [Math.cos(theta), 0, Math.sin(theta)];
+      }
+
+      function axialNormal(sign) {
+        return axis === "x" ? [sign, 0, 0] : [0, sign, 0];
+      }
+
+      function pushVertex(p, n) {
+        positions.push(p[0], p[1], p[2]);
+        normals.push(n[0], n[1], n[2]);
+        return positions.length / 3 - 1;
+      }
+
+      function addRing(axial, radius, n) {
+        const start = positions.length / 3;
         for (let i = 0; i <= segments; i += 1) {
           const t = angle * i / segments;
-          positions.push(...point(axial, r, t));
+          pushVertex(point(axial, radius, t), n(t));
+        }
+        return start;
+      }
+
+      // Outer cylindrical wall (radial normals).
+      const outA = addRing(-half, outer, t => radialNormal(t));
+      const outB = addRing(half, outer, t => radialNormal(t));
+      for (let i = 0; i < segments; i += 1) {
+        const a0 = outA + i;
+        const a1 = outA + i + 1;
+        const b0 = outB + i;
+        const b1 = outB + i + 1;
+        indices.push(a0, a1, b0, b0, a1, b1);
+      }
+
+      // Inner wall (hole) if present.
+      if (hasInner) {
+        const inA = addRing(-half, inner, t => {
+          const n = radialNormal(t);
+          return [-n[0], -n[1], -n[2]];
+        });
+        const inB = addRing(half, inner, t => {
+          const n = radialNormal(t);
+          return [-n[0], -n[1], -n[2]];
+        });
+        for (let i = 0; i < segments; i += 1) {
+          const a0 = inA + i;
+          const a1 = inA + i + 1;
+          const b0 = inB + i;
+          const b1 = inB + i + 1;
+          indices.push(a0, b0, a1, a1, b0, b1);
         }
       }
 
-      const innerBottom = 0;
-      const innerTop = row;
-      const outerBottom = row * 2;
-      const outerTop = row * 3;
-
-      for (let i = 0; i < segments; i += 1) {
-        const ib0 = innerBottom + i;
-        const ib1 = innerBottom + i + 1;
-        const it0 = innerTop + i;
-        const it1 = innerTop + i + 1;
-        const ob0 = outerBottom + i;
-        const ob1 = outerBottom + i + 1;
-        const ot0 = outerTop + i;
-        const ot1 = outerTop + i + 1;
-
-        indices.push(ob0, ob1, ot0, ot0, ob1, ot1);
-        indices.push(ib1, ib0, it1, it1, ib0, it0);
-        indices.push(it0, it1, ot0, ot0, it1, ot1);
-        indices.push(ib1, ib0, ob1, ob1, ib0, ob0);
+      // Axial end caps (annuli) — separate verts, axial normals (no crease with wall).
+      for (const sign of [-1, 1]) {
+        const axial = sign * half;
+        const n = axialNormal(sign);
+        const oStart = addRing(axial, outer, () => n);
+        if (hasInner) {
+          const iStart = addRing(axial, inner, () => n);
+          for (let i = 0; i < segments; i += 1) {
+            const o0 = oStart + i;
+            const o1 = oStart + i + 1;
+            const i0 = iStart + i;
+            const i1 = iStart + i + 1;
+            if (sign > 0) indices.push(i0, o0, i1, i1, o0, o1);
+            else indices.push(i0, i1, o0, o0, i1, o1);
+          }
+        } else {
+          // Solid disk: fan from axis center.
+          const centerIdx = pushVertex(point(axial, 0, 0), n);
+          for (let i = 0; i < segments; i += 1) {
+            const o0 = oStart + i;
+            const o1 = oStart + i + 1;
+            if (sign > 0) indices.push(centerIdx, o0, o1);
+            else indices.push(centerIdx, o1, o0);
+          }
+        }
       }
 
-      indices.push(innerBottom, outerBottom, innerTop, innerTop, outerBottom, outerTop);
-      indices.push(innerBottom + segments, innerTop + segments, outerBottom + segments);
-      indices.push(outerBottom + segments, innerTop + segments, outerTop + segments);
+      // Angular cut faces at θ=0 and θ=angle (share diagram plane at θ=0).
+      if (angle < Math.PI * 2 - 1e-4) {
+        for (const t of [0, angle]) {
+          const nCut = axis === "x"
+            ? [0, -Math.sin(t), Math.cos(t)]
+            : [-Math.sin(t), 0, Math.cos(t)];
+          // Flip so outward for the free edge at θ=angle.
+          const n = t === 0 ? [-nCut[0], -nCut[1], -nCut[2]] : nCut;
+          const o0 = pushVertex(point(-half, outer, t), n);
+          const o1 = pushVertex(point(half, outer, t), n);
+          const i0 = pushVertex(point(-half, hasInner ? inner : 0, t), n);
+          const i1 = pushVertex(point(half, hasInner ? inner : 0, t), n);
+          if (t === 0) indices.push(i0, o0, i1, i1, o0, o1);
+          else indices.push(i0, i1, o0, o0, i1, o1);
+        }
+      }
 
       const geometry = new THREE.BufferGeometry();
       geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+      geometry.setAttribute("normal", new THREE.Float32BufferAttribute(normals, 3));
       geometry.setIndex(indices);
-      geometry.computeVertexNormals();
       const mesh = new THREE.Mesh(geometry, material);
       mesh.castShadow = true;
+      mesh.renderOrder = 1;
       return mesh;
     }
 
@@ -2055,29 +2310,24 @@ import { SCENE_MESSAGE_TYPE, isSceneMessage, childEnvelope } from './sceneProtoc
       return true;
     }
 
-    // The renderer and its materials stay unchanged; only this configuration is
-    // supplied by the active question in CEE 103.
+    // Practice path supplies config=VisualSpec (Materialization already ran in parent).
+    // Demo / legacy a,b,n only: resolve from pre-attached legacy VisualSpec (no bank attach).
     if (query.get("example") === "dynamic") {
       const specFromUrl = decodeConfigParam(query.get("config"));
       if (!applyDynamicSpec(specFromUrl)) {
-        const mode = query.get("mode");
+        const mode = query.get("mode") || "area";
         const a = Number(query.get("a")) || 1;
         const b = Number(query.get("b")) || 1;
         const n = Number(query.get("n")) || 1;
-        const useWashers = query.get("method") === "washers";
-        applyDynamicSpec(mode === "area"
-          ? { title: "Problem: Area", subtitle: `Find the area under y = ${a}x from x = 0 to x = ${b}.`, orientation: "vertical", method: "area", xMin: 0, xMax: b, bottom: { t: "c", v: 0 }, top: { t: "lin", a }, formula: [], sampleLabel: "sample x", measureLabel: "strip height" }
-          : mode === "centroid"
-            ? { title: "Problem: Centroid", subtitle: `Locate the centroid of the triangle with base ${b} and height ${a}.`, orientation: "vertical", method: "area", xMin: 0, xMax: b, bottom: { t: "c", v: 0 }, top: { t: "lin", a, b: 0 }, marker: { x: b / 3, y: a / 3 }, formula: [], sampleLabel: "sample x", measureLabel: "strip height" }
-            : mode === "inertia"
-              ? { title: "Problem: Area Moment of Inertia", subtitle: `Rectangle with base ${b} and height ${a}.`, orientation: "vertical", method: "area", xMin: 0, xMax: b, bottom: { t: "c", v: 0 }, top: { t: "c", v: a }, formula: [], sampleLabel: "sample x", measureLabel: "strip height" }
-              : mode === "arc"
-                ? { title: "Problem: Arc Length", subtitle: `Find the length of y = ${a}x + ${b} from x = 0 to x = ${n}.`, orientation: "vertical", method: "arc", axisLabel: "none", xMin: 0, xMax: n, bottom: { t: "c", v: 0 }, top: { t: "lin", a, b }, formula: [`f'(x)=${a}`, `ds=\\sqrt{1+${a}^2}\\,dx`], sampleLabel: "sample x", measureLabel: "segment length" }
-                : mode === "surface"
-                  ? { title: "Problem: Surface Area", subtitle: `Rotate y = ${a}x + ${b} from x = 0 to x = ${n} about the x-axis.`, orientation: "vertical", method: "surface-x", axisLabel: "y = 0", axisY: 0, xMin: 0, xMax: n, bottom: { t: "c", v: 0 }, top: { t: "lin", a, b }, formula: [`f'(x)=${a}`, `dS=2\\pi(${a}x+${b})\\sqrt{1+${a}^2}\\,dx`], sampleLabel: "sample x", measureLabel: "slant length" }
-                  : useWashers
-                    ? { title: "Problem: Washer Method", subtitle: `Use horizontal disks for the region under y = ${a}x from x = 0 to x = ${b}.`, orientation: "horizontal", method: "disk-y", axisLabel: "x = 0", axisX: 0, yMin: 0, yMax: a * b, left: { t: "c", v: 0 }, right: { t: "lin", a: 1 / a }, formula: [], sampleLabel: "sample y", measureLabel: "disk radius" }
-                    : { title: "Problem: Shell Method", subtitle: `Rotate the region under y = ${a}x from x = 0 to x = ${b} about the y-axis.`, orientation: "vertical", method: "shell-y", axisLabel: "x = 0", axisX: 0, xMin: 0, xMax: b, bottom: { t: "c", v: 0 }, top: { t: "lin", a }, formula: ["r=x", `h=${a}x`, `dV=2\\pi x(${a}x)\\,dx`], sampleLabel: "sample x", measureLabel: "shell height" });
+        const alternate = query.get("method") === "washers";
+        const visual =
+          mode === "arc" ? "curve" : mode === "volume" || mode === "shells" || mode === "washers" ? "volume" : mode;
+        const stub = { visual, given: { a, b, n }, visualSpec: buildLegacySpec({ visual, given: { a, b, n } }) };
+        const legacy = resolveVisualSpecFromAttached(stub, { alternate });
+        if (legacy) {
+          legacy.title = legacy.title ? `Problem: ${legacy.title}` : "Problem";
+          applyDynamicSpec(legacy);
+        }
       }
       const shellsQ = Number(query.get("shells"));
       if (Number.isFinite(shellsQ) && shellsQ >= 4) shellCountInput.value = String(Math.min(48, Math.round(shellsQ)));
@@ -2274,49 +2524,25 @@ import { SCENE_MESSAGE_TYPE, isSceneMessage, childEnvelope } from './sceneProtoc
 
     function rebuildCompletedShells(count, reveal) {
       clearGroup(completedShells);
-      if (activeExample.method === "pump-bowl") {
-        if (reveal <= 0) return;
-        const dy = (activeExample.yMax - activeExample.yMin) / count;
-        const travel = Math.min(count - 0.001, reveal * count);
-        const stripIndex = Math.floor(travel);
-        const localLift = travel - stripIndex;
-        const y = activeExample.yMax - dy * (stripIndex + 0.5);
-        completedShells.add(makePumpSample(y, localLift));
-        return;
-      }
-      if (activeExample.method === "pool-fill") {
-        completedShells.add(makePoolFill(count, reveal));
-        return;
-      }
-      if (activeExample.method === "arc") {
-        completedShells.add(makeArcApproximation(activeExample, count, reveal));
-        return;
-      }
-      const shown = Math.floor(count * reveal);
       const ex = activeExample;
-      const min = ex.orientation === "vertical" ? ex.xMin : ex.yMin;
-      const max = ex.orientation === "vertical" ? ex.xMax : ex.yMax;
-      const shellWidth = (max - min) / count;
-      for (let i = 0; i < shown; i += 1) {
-        const value = min + shellWidth * (i + 0.5);
-        let piece;
-        if (isAreaStripMethod(ex.method)) {
-          piece = makeSlice(ex, value, shellWidth * 0.86, materials.completed);
-        } else if (ex.method.startsWith("cross-")) {
-          piece = makeCrossSection(ex, value, shellWidth * 0.86, materials.completed, 1);
-        } else if (ex.method.startsWith("shell")) {
-          piece = makeShell(ex, value, Math.PI * 2, materials.completed, shellWidth);
-        } else if (ex.method === "surface-x") {
-          piece = makeSurfaceBand(ex, value - shellWidth / 2, value + shellWidth / 2, Math.PI * 2, materials.completed);
-          completedShells.add(makeCircumferenceRing(value, ex.top(value), materials.lineAmber, ex.axisY ?? 0));
-        } else if (ex.method === "surface-y") {
-          piece = makeSurfaceBandY(ex, value - shellWidth / 2, value + shellWidth / 2, Math.PI * 2, materials.completed);
-          completedShells.add(makeCircumferenceRingY(ex, value, materials.lineAmber));
-        } else {
-          piece = makeWasherOrDisk(ex, value, Math.PI * 2, materials.completed, shellWidth);
+      const kind = stackPieceKind(ex.method);
+      const helpers = {
+        makeSlice,
+        makeCrossSection,
+        makeShell,
+        makeWasherOrDisk,
+        makeSurfaceBand,
+        makeSurfaceBandY,
+        makeCircumferenceRing,
+        makeCircumferenceRingY,
+        makeArcApproximation,
+        makePumpSample,
+        makePoolFill,
+        add: (_g, piece) => {
+          if (piece) completedShells.add(piece);
         }
-        completedShells.add(piece);
-      }
+      };
+      rebuildCompletedStack(kind, ex, count, reveal, helpers, materials);
     }
 
     function updateScene(readFromSlider = false) {
@@ -2348,7 +2574,7 @@ import { SCENE_MESSAGE_TYPE, isSceneMessage, childEnvelope } from './sceneProtoc
 
       // Method-family early adapters (goat / pool own their full frame).
       if (family === "goat-barn") {
-        const stage = progress < STEP_PROGRESS.rotate ? 1 : progress < STEP_PROGRESS.stack ? 2 : 3;
+        const stage = policy.goatStage;
         const goatKey = `${exampleInput.value}:${stage}:${Math.floor(progress * 50)}`;
         if (goatKey !== lastCompletedKey) {
           clearGroup(sliceGroup);
@@ -2404,9 +2630,12 @@ import { SCENE_MESSAGE_TYPE, isSceneMessage, childEnvelope } from './sceneProtoc
           sliceGroup.add(makeWaterDisk(y, sampleWidth * 0.82, materials.water));
         } else if (policy.showSlice) {
           slice = makeSlice(ex, sampleValue, sampleWidth * 0.82);
-          slice.position.z = 0.014 + rotatePhase * 0.025;
+          // Keep the strip in the diagram plane — a z lift projected as a gap
+          // under the usual ¾ camera. Depth layering is handled by materials.
+          slice.position.z = PLANE_Z;
           slice.scale.y = ex.orientation === "vertical" ? 0.08 + slicePhase * 0.92 : 1;
           slice.scale.x = ex.orientation === "horizontal" ? 0.08 + slicePhase * 0.92 : 1;
+          slice.renderOrder = 1;
           sliceGroup.add(slice);
         }
         lastSliceKey = sliceKey;
@@ -2419,10 +2648,21 @@ import { SCENE_MESSAGE_TYPE, isSceneMessage, childEnvelope } from './sceneProtoc
       if (shellKey !== lastShellKey) {
         clearGroup(shellGroup);
         if (policy.showRotateSample) {
-          // Dispatch by method family (geometry adapters stay local).
-          if (family === "pump-bowl") {
-            shellGroup.add(makePumpSample(sampleValue, rotatePhase));
-          } else if (family === "arc") {
+          const kind = policy.pieceKind || stackPieceKind(ex.method);
+          const rotHelpers = {
+            makeSlice,
+            makeCrossSection,
+            makeShell,
+            makeWasherOrDisk,
+            makeSurfaceBand,
+            makeSurfaceBandY,
+            makeCircumferenceRing,
+            makeCircumferenceRingY,
+            makeArcApproximation,
+            makePumpSample,
+            makePoolSample
+          };
+          if (family === "arc") {
             shellGroup.add(makeArcApproximation(ex, Math.max(3, Math.floor(shellCount * rotatePhase)), 1));
           } else if (family === "surface") {
             if (ex.method === "surface-x") {
@@ -2432,8 +2672,6 @@ import { SCENE_MESSAGE_TYPE, isSceneMessage, childEnvelope } from './sceneProtoc
               shellGroup.add(makeSurfaceBandY(ex, sampleValue - sampleWidth / 2, sampleValue + sampleWidth / 2, shellAngle, materials.shell));
               shellGroup.add(makeCircumferenceRingY(ex, sampleValue, materials.lineAmber));
             }
-          } else if (family === "cross") {
-            shellGroup.add(makeCrossSection(ex, sampleValue, sampleWidth * 0.82, materials.shell, rotatePhase));
           } else if (family === "area-strip") {
             shellGroup.add(makeSlice(ex, sampleValue, sampleWidth * 0.82, materials.shell));
             if (ex.method === "centroid" && ex.orientation === "vertical") {
@@ -2446,10 +2684,18 @@ import { SCENE_MESSAGE_TYPE, isSceneMessage, childEnvelope } from './sceneProtoc
               shellGroup.add(makePoint(sampleValue, midY, 0xbc9a62, 0.016));
             }
           } else {
-            const pieceMesh = family === "shell"
-              ? makeShell(ex, sampleValue, shellAngle, materials.shell, sampleWidth * 0.82)
-              : makeWasherOrDisk(ex, sampleValue, shellAngle, materials.shell, sampleWidth * 0.82);
-            shellGroup.add(pieceMesh);
+            const pieceMesh = buildRotateSample(
+              family,
+              kind,
+              ex,
+              sampleValue,
+              sampleWidth * 0.82,
+              shellAngle,
+              rotatePhase,
+              rotHelpers,
+              materials
+            );
+            if (pieceMesh) shellGroup.add(pieceMesh);
           }
           if (family === "shell") {
             shellGroup.add(makeShellRim(ex, sampleValue, shellAngle, materials.lineAmber));

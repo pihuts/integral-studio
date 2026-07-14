@@ -1,30 +1,14 @@
 /**
- * Problem module — bank intake, finalize, optional procedural fallback.
- * Production path: generated bank via getBriggsProblem. Procedural library is
- * last-resort only when the bank cannot supply the index.
+ * Problem module — finalize + Bank intake + procedural fallback.
+ * Production path: Bank via bank.js / getBriggsProblem.
+ * Materialization is owned by prepareProblem / materializeVisual — not re-run here beyond load.
  */
 
-import {
-  getBriggsProblem,
-  briggsProblemCount,
-  loadBriggsBank,
-  QUESTIONS_PER_TOPIC
-} from "./briggsProblems.js";
+import { problem as bankProblem, problemCount as bankCount, loadBank, QUESTIONS_PER_TOPIC, TOPICS } from "./bank.js";
 import { buildLegacySpec } from "./visualSpecs.js";
-import { ensureVisualSpec, materializeVisualExample } from "./materializeVisual.js";
+import { prepareProblem } from "./preparedProblem.js";
 
-export { loadBriggsBank, QUESTIONS_PER_TOPIC, briggsProblemCount };
-
-export const TOPICS = {
-  fundamentals: { label: "Fundamentals", icon: "∫", description: "Antiderivatives" },
-  area: { label: "Area", icon: "▨", description: "Accumulated area" },
-  volumes: { label: "Volumes", icon: "◒", description: "Shells & washers" },
-  centroids: { label: "Centroids", icon: "◎", description: "Balance points" },
-  arc: { label: "Arc Length", icon: "⌒", description: "Curve length" },
-  surface: { label: "Surface Area", icon: "◌", description: "Revolution surface" },
-  inertia: { label: "Inertia", icon: "I", description: "Area moments" },
-  applications: { label: "Word Problems", icon: "W", description: "Work, pumping & motion" }
-};
+export { loadBank as loadBriggsBank, QUESTIONS_PER_TOPIC, TOPICS, bankCount as briggsProblemCount };
 
 const choice = (id, latex, label) => ({ id, latex, label });
 const shuffle = values => [...values].sort(() => Math.random() - 0.5);
@@ -192,6 +176,7 @@ function proceduralFallback(topic) {
   const item = factory();
   item.given = { a, b, n };
   item.visualSpec = buildLegacySpec(item);
+  item._specProvenance = "legacy";
   if (item.dualMethod === true) {
     item.dualMethod = Boolean(item.visualSpec?.alternateSpec);
   }
@@ -200,43 +185,40 @@ function proceduralFallback(topic) {
 }
 
 /**
- * Load the problem for topic + index. Prefers bank; procedural only if bank short.
+ * Load raw finalized problem for topic + index (Bank or procedural).
+ * Does not materialize — Practice session prepareProblem owns that seam.
  */
-export function loadProblem(topic, questionIndex) {
-  const briggsCount = briggsProblemCount(topic);
+export function loadProblemRow(topic, questionIndex) {
+  const briggsCount = bankCount(topic);
   let item;
   if (questionIndex < briggsCount) {
-    item = finalizeProblem(getBriggsProblem(topic, null, questionIndex));
+    item = finalizeProblem(bankProblem(topic, questionIndex));
   } else {
     item = proceduralFallback(topic);
   }
+  return item;
+}
+
+/**
+ * Load + prepare once. Prefer createPracticeSession for Practice UI.
+ * @returns {object|null} prepared.problem with dualMethod set
+ */
+export function loadProblem(topic, questionIndex) {
+  const item = loadProblemRow(topic, questionIndex);
   if (!item) return null;
-  const { problem } = materializeVisualExample(item);
-  // Preserve shuffled choices / correctId from finalize
-  return Object.assign(problem || item, {
-    choices: item.choices,
-    correctId: item.correctId,
-    ui: item.ui,
-    result: item.result,
-    _proceduralFallback: item._proceduralFallback
-  });
+  const prepared = prepareProblem(item);
+  const problem = prepared.problem || item;
+  problem.dualMethod = prepared.dualMethod;
+  problem._prepared = prepared;
+  return problem;
 }
 
+/**
+ * Visual label from prepared cache or one-shot prepare (for non-session callers).
+ */
 export function visualLabel(problem, { alternate = false } = {}) {
-  const { spec, dualMethod } = materializeVisualExample(problem, { alternate });
-  if (dualMethod) return alternate ? "Horizontal strips" : "Vertical strips";
-  if (spec?.title) return spec.title;
-  const type = problem?.visual;
-  return (
-    {
-      area: "Area slices",
-      volume: alternate ? "Disks & washers" : "Shells",
-      centroid: "Centroid",
-      curve: "Arc length",
-      surface: "Surface bands",
-      inertia: "Axis distance"
-    }[type] || "Visual"
-  );
+  if (problem?._prepared) {
+    return problem._prepared.visualLabel(alternate);
+  }
+  return prepareProblem(problem).visualLabel(alternate);
 }
-
-export { ensureVisualSpec, materializeVisualExample };

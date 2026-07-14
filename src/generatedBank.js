@@ -14063,4 +14063,4 @@ export const GENERATED_BANK = {
   ],
 };
 
-export const QUESTIONS_PER_TOPIC = 50;
+export { QUESTIONS_PER_TOPIC } from "./bankMeta.js";
